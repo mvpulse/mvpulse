@@ -2,8 +2,28 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { createProxyMiddleware } from "http-proxy-middleware";
 
 const app = express();
+
+// Proxy middleware for Movement Network RPC (to avoid CORS issues)
+app.use(
+  "/api/movement-testnet",
+  createProxyMiddleware({
+    target: "https://testnet.movementnetwork.xyz",
+    changeOrigin: true,
+    pathRewrite: { "^/api/movement-testnet": "" },
+  })
+);
+
+app.use(
+  "/api/movement-mainnet",
+  createProxyMiddleware({
+    target: "https://full.mainnet.movementinfra.xyz",
+    changeOrigin: true,
+    pathRewrite: { "^/api/movement-mainnet": "" },
+  })
+);
 const httpServer = createServer(app);
 
 declare module "http" {
@@ -88,8 +108,7 @@ app.use((req, res, next) => {
   httpServer.listen(
     {
       port,
-      host: "0.0.0.0",
-      reusePort: true,
+      host: "0.0.0.0"
     },
     () => {
       log(`serving on port ${port}`);

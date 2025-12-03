@@ -36,6 +36,7 @@ export default defineConfig({
     },
   },
   root: path.resolve(import.meta.dirname, "client"),
+  envDir: path.resolve(import.meta.dirname),
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
@@ -46,6 +47,20 @@ export default defineConfig({
     fs: {
       strict: true,
       deny: ["**/.*"],
+    },
+    proxy: {
+      "/api/movement-testnet": {
+        target: "https://testnet.movementnetwork.xyz",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/movement-testnet/, ""),
+        secure: true,
+      },
+      "/api/movement-mainnet": {
+        target: "https://full.mainnet.movementinfra.xyz",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/movement-mainnet/, ""),
+        secure: true,
+      },
     },
   },
 });

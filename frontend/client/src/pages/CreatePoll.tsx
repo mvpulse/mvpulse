@@ -70,6 +70,8 @@ export default function CreatePoll() {
   };
 
   const handleCreate = async () => {
+    console.log("handleCreate called", { connected, contractAddress: config.contractAddress });
+
     if (!connected) {
       toast.error("Please connect your wallet first");
       return;
@@ -81,8 +83,11 @@ export default function CreatePoll() {
     }
 
     if (!validateForm()) {
+      console.log("Form validation failed");
       return;
     }
+
+    console.log("Form validated, creating poll...");
 
     try {
       const validOptions = options.filter((o) => o.trim());

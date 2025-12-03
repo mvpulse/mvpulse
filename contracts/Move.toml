@@ -4,13 +4,13 @@ version = "1.0.0"
 authors = []
 
 [addresses]
-contracts = "_"
+contracts = "0xba9578430aeadecce874f8d2d5b0a7de153f585772ac91bb4482a6985ce90933"
 
 [dev-addresses]
 
 [dependencies.AptosFramework]
 git = "https://github.com/movementlabsxyz/aptos-core.git"
-rev = "movement-v1.0.0-rc1"
+rev = "e85553104911152d800fa2c32f7ef0d80daf60b9"
 subdir = "aptos-move/framework/aptos-framework"
 
 [dev-dependencies]

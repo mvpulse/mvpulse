@@ -1,4 +1,4 @@
-import { Aptos, AptosConfig } from "@aptos-labs/ts-sdk";
+import { Aptos, AptosConfig, Network } from "@aptos-labs/ts-sdk";
 import type { NetworkConfig } from "@/contexts/NetworkContext";
 
 // Module name for the poll contract
@@ -7,6 +7,7 @@ export const MODULE_NAME = "poll";
 // Create an Aptos client for the given network config
 export function createAptosClient(config: NetworkConfig): Aptos {
   const aptosConfig = new AptosConfig({
+    network: Network.CUSTOM,
     fullnode: config.rpcUrl,
   });
   return new Aptos(aptosConfig);
