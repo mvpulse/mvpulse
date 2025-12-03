@@ -61,9 +61,6 @@ export function NetworkSwitcher() {
           <SelectItem value="testnet">
             <div className="flex items-center gap-2">
               <span>Testnet</span>
-              <Badge variant="secondary" className="text-[10px] px-1 py-0">
-                Porto
-              </Badge>
             </div>
           </SelectItem>
           <SelectItem value="mainnet" disabled={!NETWORK_CONFIGS.mainnet.contractAddress}>
