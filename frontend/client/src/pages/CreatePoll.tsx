@@ -5,14 +5,15 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Plus, Trash2, Sparkles, ArrowRight, ArrowLeft, Check, Loader2, Wallet } from "lucide-react";
-import { useState } from "react";
+import { Plus, Trash2, Sparkles, ArrowRight, ArrowLeft, Check, Loader2, Wallet, Coins, Info, Calculator } from "lucide-react";
+import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useWallet } from "@aptos-labs/wallet-adapter-react";
 import { useContract } from "@/hooks/useContract";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { REWARD_TYPE, PLATFORM_FEE_BPS, calculatePlatformFee, calculateNetAmount } from "@/types/poll";
 
 // Duration options in seconds
 const DURATION_OPTIONS = {
@@ -35,8 +36,61 @@ export default function CreatePoll() {
   const [category, setCategory] = useState("");
   const [duration, setDuration] = useState<keyof typeof DURATION_OPTIONS>("24h");
   const [options, setOptions] = useState(["", ""]);
-  const [distribution, setDistribution] = useState("equal");
-  const [rewardAmount, setRewardAmount] = useState("");
+
+  // Incentives state
+  const [rewardType, setRewardType] = useState<number>(REWARD_TYPE.NONE);
+  // Fixed per vote mode
+  const [rewardPerVoter, setRewardPerVoter] = useState("");
+  const [targetResponders, setTargetResponders] = useState("");
+  // Equal split mode
+  const [totalFund, setTotalFund] = useState("");
+  const [maxResponders, setMaxResponders] = useState("");
+
+  // Calculated values
+  const calculations = useMemo(() => {
+    const feePercent = PLATFORM_FEE_BPS / 100;
+
+    if (rewardType === REWARD_TYPE.FIXED_PER_VOTE) {
+      const reward = parseFloat(rewardPerVoter) || 0;
+      const target = parseInt(targetResponders) || 0;
+      const netAmount = reward * target;
+      const grossAmount = netAmount > 0 ? Math.ceil((netAmount * 10000) / (10000 - PLATFORM_FEE_BPS) * 1e8) / 1e8 : 0;
+      const fee = grossAmount - netAmount;
+
+      return {
+        grossAmount,
+        fee,
+        netAmount,
+        rewardPerVoter: reward,
+        maxVoters: target,
+        isValid: reward > 0 && target > 0,
+      };
+    } else if (rewardType === REWARD_TYPE.EQUAL_SPLIT) {
+      const gross = parseFloat(totalFund) || 0;
+      const max = parseInt(maxResponders) || 0;
+      const fee = calculatePlatformFee(gross * 1e8) / 1e8;
+      const net = calculateNetAmount(gross * 1e8) / 1e8;
+      const perVoter = max > 0 ? net / max : 0;
+
+      return {
+        grossAmount: gross,
+        fee,
+        netAmount: net,
+        rewardPerVoter: perVoter,
+        maxVoters: max,
+        isValid: gross > 0 && max > 0,
+      };
+    }
+
+    return {
+      grossAmount: 0,
+      fee: 0,
+      netAmount: 0,
+      rewardPerVoter: 0,
+      maxVoters: 0,
+      isValid: true, // No incentives is valid
+    };
+  }, [rewardType, rewardPerVoter, targetResponders, totalFund, maxResponders]);
 
   const addOption = () => setOptions([...options, ""]);
   const removeOption = (index: number) => setOptions(options.filter((_, i) => i !== index));
@@ -66,6 +120,17 @@ export default function CreatePoll() {
       setStep(2);
       return false;
     }
+    // Validate incentives
+    if (rewardType === REWARD_TYPE.FIXED_PER_VOTE && !calculations.isValid) {
+      toast.error("Please specify reward per voter and target responders");
+      setStep(3);
+      return false;
+    }
+    if (rewardType === REWARD_TYPE.EQUAL_SPLIT && !calculations.isValid) {
+      toast.error("Please specify total fund and max responders");
+      setStep(3);
+      return false;
+    }
     return true;
   };
 
@@ -91,14 +156,23 @@ export default function CreatePoll() {
 
     try {
       const validOptions = options.filter((o) => o.trim());
-      const rewardPerVote = rewardAmount ? Math.floor(parseFloat(rewardAmount) * 1e8) : 0; // Convert to octas
+
+      // For fixed mode: reward_per_vote > 0, max_voters = target
+      // For equal split: reward_per_vote = 0, max_voters = max responders
+      const rewardPerVoteOctas = rewardType === REWARD_TYPE.FIXED_PER_VOTE
+        ? Math.floor(calculations.rewardPerVoter * 1e8)
+        : 0;
+      const maxVoters = calculations.maxVoters;
+      const fundAmountOctas = Math.floor(calculations.grossAmount * 1e8);
 
       const result = await createPoll({
         title: title.trim(),
         description: description.trim(),
         options: validOptions,
-        rewardPerVote,
+        rewardPerVote: rewardPerVoteOctas,
+        maxVoters,
         durationSecs: DURATION_OPTIONS[duration],
+        fundAmount: fundAmountOctas,
       });
 
       toast.success("Poll Created!", {
@@ -282,74 +356,167 @@ export default function CreatePoll() {
         {step === 3 && (
           <Card className="border-border/50 bg-card/50 backdrop-blur-sm animate-in fade-in slide-in-from-right-8 duration-300">
             <CardHeader>
-              <CardTitle>Step 3: Incentives (Optional)</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                <Coins className="w-5 h-5" />
+                Step 3: Incentives (Optional)
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Token Type</Label>
-                  <Select defaultValue="move">
-                    <SelectTrigger className="bg-muted/30">
-                      <SelectValue placeholder="Select token" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="move">MOVE</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Reward Per Vote (MOVE)</Label>
-                  <Input
-                    type="number"
-                    placeholder="0.00"
-                    className="bg-muted/30"
-                    value={rewardAmount}
-                    onChange={(e) => setRewardAmount(e.target.value)}
-                  />
-                </div>
+              {/* Info Banner */}
+              <div className="p-3 rounded-lg bg-muted/30 border border-border/50 flex items-start gap-2">
+                <Info className="w-4 h-4 mt-0.5 text-muted-foreground shrink-0" />
+                <p className="text-sm text-muted-foreground">
+                  Fund your poll to incentivize participation. A {PLATFORM_FEE_BPS / 100}% platform fee applies.
+                  Distribution method is chosen when you close the poll.
+                </p>
               </div>
 
+              {/* Reward Type Selection */}
               <div className="space-y-3">
-                <Label>Distribution Method</Label>
+                <Label>Reward Type</Label>
                 <RadioGroup
-                  defaultValue="equal"
-                  onValueChange={setDistribution}
-                  className="grid grid-cols-1 md:grid-cols-2 gap-4"
+                  value={rewardType.toString()}
+                  onValueChange={(v) => setRewardType(parseInt(v))}
+                  className="grid grid-cols-1 md:grid-cols-3 gap-3"
                 >
+                  {/* No Rewards */}
                   <div
                     className={cn(
-                      "flex items-start space-x-3 space-y-0 rounded-md border p-4 shadow-sm cursor-pointer transition-all",
-                      distribution === "equal" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"
+                      "flex items-center space-x-3 rounded-md border p-3 cursor-pointer transition-all",
+                      rewardType === REWARD_TYPE.NONE
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:bg-muted/50"
                     )}
+                    onClick={() => setRewardType(REWARD_TYPE.NONE)}
                   >
-                    <RadioGroupItem value="equal" id="equal" className="mt-1" />
-                    <div className="space-y-1">
-                      <Label htmlFor="equal" className="font-medium cursor-pointer">
-                        Equal Split
-                      </Label>
-                      <p className="text-xs text-muted-foreground">
-                        Total fund is divided equally among all participants when the poll closes.
-                      </p>
-                    </div>
+                    <RadioGroupItem value={REWARD_TYPE.NONE.toString()} id="no-reward" />
+                    <Label htmlFor="no-reward" className="cursor-pointer text-sm">No Rewards</Label>
                   </div>
+
+                  {/* Fixed Per Vote */}
                   <div
                     className={cn(
-                      "flex items-start space-x-3 space-y-0 rounded-md border p-4 shadow-sm cursor-pointer transition-all",
-                      distribution === "fixed" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"
+                      "flex items-center space-x-3 rounded-md border p-3 cursor-pointer transition-all",
+                      rewardType === REWARD_TYPE.FIXED_PER_VOTE
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:bg-muted/50"
                     )}
+                    onClick={() => setRewardType(REWARD_TYPE.FIXED_PER_VOTE)}
                   >
-                    <RadioGroupItem value="fixed" id="fixed" className="mt-1" />
-                    <div className="space-y-1">
-                      <Label htmlFor="fixed" className="font-medium cursor-pointer">
-                        Fixed Amount
-                      </Label>
-                      <p className="text-xs text-muted-foreground">
-                        Each participant receives a fixed amount until the fund runs out.
-                      </p>
-                    </div>
+                    <RadioGroupItem value={REWARD_TYPE.FIXED_PER_VOTE.toString()} id="fixed" />
+                    <Label htmlFor="fixed" className="cursor-pointer text-sm">Fixed Per Vote</Label>
+                  </div>
+
+                  {/* Equal Split */}
+                  <div
+                    className={cn(
+                      "flex items-center space-x-3 rounded-md border p-3 cursor-pointer transition-all",
+                      rewardType === REWARD_TYPE.EQUAL_SPLIT
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:bg-muted/50"
+                    )}
+                    onClick={() => setRewardType(REWARD_TYPE.EQUAL_SPLIT)}
+                  >
+                    <RadioGroupItem value={REWARD_TYPE.EQUAL_SPLIT.toString()} id="equal" />
+                    <Label htmlFor="equal" className="cursor-pointer text-sm">Equal Split</Label>
                   </div>
                 </RadioGroup>
               </div>
+
+              {/* Fixed Per Vote Inputs */}
+              {rewardType === REWARD_TYPE.FIXED_PER_VOTE && (
+                <div className="space-y-4 p-4 rounded-lg border border-border/50 bg-background">
+                  <p className="text-sm text-muted-foreground">
+                    Each respondent gets a fixed reward. Total fund is auto-calculated.
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Reward per voter (MOVE)</Label>
+                      <Input
+                        type="number"
+                        step="0.001"
+                        min="0"
+                        placeholder="0.1"
+                        value={rewardPerVoter}
+                        onChange={(e) => setRewardPerVoter(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Target responders</Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        placeholder="100"
+                        value={targetResponders}
+                        onChange={(e) => setTargetResponders(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Equal Split Inputs */}
+              {rewardType === REWARD_TYPE.EQUAL_SPLIT && (
+                <div className="space-y-4 p-4 rounded-lg border border-border/50 bg-background">
+                  <p className="text-sm text-muted-foreground">
+                    Total fund is split equally among all voters. Reward per voter is auto-calculated.
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Total fund (MOVE)</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        placeholder="10"
+                        value={totalFund}
+                        onChange={(e) => setTotalFund(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Max responders</Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        placeholder="100"
+                        value={maxResponders}
+                        onChange={(e) => setMaxResponders(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Calculation Summary */}
+              {rewardType !== REWARD_TYPE.NONE && calculations.isValid && (
+                <div className="p-4 rounded-lg bg-accent/10 border border-accent/20 space-y-2">
+                  <div className="flex items-center gap-2 text-accent font-medium">
+                    <Calculator className="w-4 h-4" />
+                    Summary
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Total Deposit:</span>
+                      <span className="font-mono font-medium">{calculations.grossAmount.toFixed(4)} MOVE</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Platform Fee ({PLATFORM_FEE_BPS / 100}%):</span>
+                      <span className="font-mono text-destructive">-{calculations.fee.toFixed(4)} MOVE</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Net Reward Pool:</span>
+                      <span className="font-mono font-medium text-green-600">{calculations.netAmount.toFixed(4)} MOVE</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Per voter:</span>
+                      <span className="font-mono font-medium">~{calculations.rewardPerVoter.toFixed(4)} MOVE</span>
+                    </div>
+                  </div>
+                  <div className="pt-2 border-t border-accent/20 text-xs text-muted-foreground">
+                    Max {calculations.maxVoters} voters can participate
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}

@@ -6,7 +6,15 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Trophy, Clock, Share2, AlertCircle, Loader2, Wallet, CheckCircle2 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Trophy, Clock, Share2, AlertCircle, Loader2, Wallet, CheckCircle2, Gift, Send, Coins, XCircle, Users, HandCoins } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
 import { useWallet } from "@aptos-labs/wallet-adapter-react";
@@ -14,19 +22,35 @@ import { useContract } from "@/hooks/useContract";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { truncateAddress } from "@/lib/contract";
 import type { PollWithMeta } from "@/types/poll";
+import { POLL_STATUS, DISTRIBUTION_MODE } from "@/types/poll";
 
 export default function PollDetails() {
   const { id } = useParams();
   const { connected, account } = useWallet();
-  const { getPoll, vote, hasVoted: checkHasVoted, loading: contractLoading } = useContract();
+  const {
+    getPoll,
+    vote,
+    hasVoted: checkHasVoted,
+    hasClaimed: checkHasClaimed,
+    claimReward,
+    distributeRewards,
+    closePoll,
+    loading: contractLoading,
+  } = useContract();
   const { config } = useNetwork();
 
   const [poll, setPoll] = useState<PollWithMeta | null>(null);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [userHasVoted, setUserHasVoted] = useState(false);
+  const [userHasClaimed, setUserHasClaimed] = useState(false);
   const [userVotedOption, setUserVotedOption] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isVoting, setIsVoting] = useState(false);
+  const [isClaiming, setIsClaiming] = useState(false);
+  const [isDistributing, setIsDistributing] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
+  const [isClosePollModalOpen, setIsClosePollModalOpen] = useState(false);
+  const [selectedDistributionMode, setSelectedDistributionMode] = useState<number>(DISTRIBUTION_MODE.MANUAL_PULL);
 
   const pollId = id ? parseInt(id, 10) : null;
 
@@ -42,10 +66,13 @@ export default function PollDetails() {
       const pollData = await getPoll(pollId);
       setPoll(pollData);
 
-      // Check if user has voted
+      // Check if user has voted and claimed
       if (account?.address) {
         const voted = await checkHasVoted(pollId);
         setUserHasVoted(voted);
+
+        const claimed = await checkHasClaimed(pollId);
+        setUserHasClaimed(claimed);
 
         // Find which option user voted for
         if (voted && pollData?.voters) {
@@ -64,7 +91,7 @@ export default function PollDetails() {
     } finally {
       setIsLoading(false);
     }
-  }, [pollId, getPoll, checkHasVoted, account?.address]);
+  }, [pollId, getPoll, checkHasVoted, checkHasClaimed, account?.address]);
 
   useEffect(() => {
     fetchPollData();
@@ -110,6 +137,90 @@ export default function PollDetails() {
     navigator.clipboard.writeText(window.location.href);
     toast.success("Link copied to clipboard!");
   };
+
+  // Handle claiming reward (for Manual Pull mode)
+  const handleClaim = async () => {
+    if (pollId === null || !connected) return;
+
+    setIsClaiming(true);
+    try {
+      const result = await claimReward(pollId);
+      toast.success("Reward Claimed!", {
+        description: "Your reward has been transferred to your wallet.",
+        action: {
+          label: "View TX",
+          onClick: () => window.open(`${config.explorerUrl}/txn/${result.hash}?network=testnet`, "_blank"),
+        },
+      });
+      setUserHasClaimed(true);
+      await fetchPollData();
+    } catch (error) {
+      console.error("Failed to claim reward:", error);
+      toast.error("Failed to claim reward", {
+        description: error instanceof Error ? error.message : "Transaction failed",
+      });
+    } finally {
+      setIsClaiming(false);
+    }
+  };
+
+  // Handle distributing rewards (for Manual Push mode - creator only)
+  const handleDistribute = async () => {
+    if (pollId === null || !connected) return;
+
+    setIsDistributing(true);
+    try {
+      const result = await distributeRewards(pollId);
+      toast.success("Rewards Distributed!", {
+        description: "All voters have received their rewards.",
+        action: {
+          label: "View TX",
+          onClick: () => window.open(`${config.explorerUrl}/txn/${result.hash}?network=testnet`, "_blank"),
+        },
+      });
+      await fetchPollData();
+    } catch (error) {
+      console.error("Failed to distribute rewards:", error);
+      toast.error("Failed to distribute rewards", {
+        description: error instanceof Error ? error.message : "Transaction failed",
+      });
+    } finally {
+      setIsDistributing(false);
+    }
+  };
+
+  // Handle closing poll (creator only)
+  const handleClosePoll = async () => {
+    if (pollId === null || !connected) return;
+
+    setIsClosing(true);
+    try {
+      const result = await closePoll(pollId, selectedDistributionMode);
+      setIsClosePollModalOpen(false);
+      toast.success("Poll Closed!", {
+        description: selectedDistributionMode === DISTRIBUTION_MODE.MANUAL_PULL
+          ? "Participants can now claim their rewards."
+          : "You can now distribute rewards to all voters.",
+        action: {
+          label: "View TX",
+          onClick: () => window.open(`${config.explorerUrl}/txn/${result.hash}?network=testnet`, "_blank"),
+        },
+      });
+      await fetchPollData();
+    } catch (error) {
+      console.error("Failed to close poll:", error);
+      toast.error("Failed to close poll", {
+        description: error instanceof Error ? error.message : "Transaction failed",
+      });
+    } finally {
+      setIsClosing(false);
+    }
+  };
+
+  // Check if current user is the poll creator
+  const isCreator = poll && account?.address
+    ? poll.creator.toLowerCase() === account.address.toString().toLowerCase()
+    : false;
 
   // Loading state
   if (isLoading) {
@@ -167,7 +278,25 @@ export default function PollDetails() {
   }
 
   const rewardPerVoteMove = poll.reward_per_vote / 1e8;
-  const estimatedTotalReward = rewardPerVoteMove * (poll.totalVotes || 1);
+  const rewardPoolMove = poll.reward_pool / 1e8;
+  const estimatedRewardPerVoter = poll.totalVotes > 0
+    ? (poll.reward_per_vote > 0 ? rewardPerVoteMove : rewardPoolMove / poll.totalVotes)
+    : 0;
+
+  // Helper to get status label
+  const getStatusLabel = () => {
+    switch (poll.status) {
+      case POLL_STATUS.ACTIVE:
+        return { label: "Active", variant: "default" as const, className: "bg-green-500/20 text-green-500 border-green-500/50" };
+      case POLL_STATUS.CLAIMING:
+        return { label: "Claiming", variant: "default" as const, className: "bg-yellow-500/20 text-yellow-500 border-yellow-500/50" };
+      case POLL_STATUS.CLOSED:
+        return { label: "Closed", variant: "secondary" as const, className: "" };
+      default:
+        return { label: "Unknown", variant: "secondary" as const, className: "" };
+    }
+  };
+  const statusInfo = getStatusLabel();
 
   return (
     <div className="container max-w-4xl mx-auto px-4 py-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
@@ -177,21 +306,27 @@ export default function PollDetails() {
           <div>
             <div className="flex items-center gap-2 mb-4">
               <Badge
-                variant={poll.isActive ? "default" : "secondary"}
-                className={poll.isActive ? "bg-green-500/20 text-green-500 border-green-500/50" : ""}
+                variant={statusInfo.variant}
+                className={statusInfo.className}
               >
-                {poll.isActive ? "Active" : "Closed"}
+                {statusInfo.label}
               </Badge>
               <span className="text-sm text-muted-foreground flex items-center gap-1">
                 <Clock className="w-3 h-3" /> {poll.timeRemaining}
               </span>
+              {poll.reward_pool > 0 && (
+                <Badge variant="outline" className="bg-accent/10 text-accent border-accent/30">
+                  <Coins className="w-3 h-3 mr-1" />
+                  {rewardPoolMove.toFixed(2)} MOVE
+                </Badge>
+              )}
             </div>
             <h1 className="text-3xl md:text-4xl font-display font-bold leading-tight mb-4">
               {poll.title}
             </h1>
             <p className="text-muted-foreground text-lg">{poll.description}</p>
             <p className="text-xs text-muted-foreground mt-2">
-              Created by {truncateAddress(poll.creator)}
+              Created by {truncateAddress(poll.creator)} {isCreator && <span className="text-primary">(You)</span>}
             </p>
           </div>
 
@@ -291,6 +426,7 @@ export default function PollDetails() {
 
         {/* Sidebar Info */}
         <div className="space-y-6">
+          {/* Reward Info Card */}
           <Card className="bg-accent/5 border-accent/20">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-accent">
@@ -299,26 +435,127 @@ export default function PollDetails() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Per Vote</span>
+                <span className="text-muted-foreground">Reward Pool</span>
                 <span className="font-bold font-mono">
-                  {rewardPerVoteMove > 0 ? `${rewardPerVoteMove.toFixed(4)} MOVE` : "No reward"}
+                  {rewardPoolMove > 0 ? `${rewardPoolMove.toFixed(4)} MOVE` : "No funds"}
                 </span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-muted-foreground">Total Pool</span>
+                <span className="text-muted-foreground">Per Voter</span>
                 <span className="font-bold font-mono">
-                  {estimatedTotalReward > 0 ? `~${estimatedTotalReward.toFixed(2)} MOVE` : "N/A"}
+                  {estimatedRewardPerVoter > 0
+                    ? `~${estimatedRewardPerVoter.toFixed(4)} MOVE`
+                    : "N/A"}
                 </span>
               </div>
-              {rewardPerVoteMove > 0 && (
-                <div className="text-xs text-muted-foreground mt-2 flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  Rewards are distributed automatically via smart contract when the poll closes.
+              <div className="flex justify-between items-center">
+                <span className="text-muted-foreground">Distribution</span>
+                <Badge variant="outline" className="text-xs">
+                  {poll.distribution_mode === DISTRIBUTION_MODE.UNSET
+                    ? "Not set"
+                    : poll.distribution_mode === DISTRIBUTION_MODE.MANUAL_PULL
+                    ? "Claim"
+                    : "Push"}
+                </Badge>
+              </div>
+              {poll.rewards_distributed && (
+                <div className="text-xs text-green-500 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4" />
+                  Rewards have been distributed
                 </div>
               )}
             </CardContent>
           </Card>
 
+          {/* Actions Card - Claim/Distribute/Close */}
+          {connected && (rewardPoolMove > 0 || isCreator) && (
+            <Card className="border-primary/20">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Gift className="w-5 h-5 text-primary" /> Actions
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {/* Claim Button - for voters in Manual Pull mode when status is CLAIMING */}
+                {poll.status === POLL_STATUS.CLAIMING &&
+                  poll.distribution_mode === DISTRIBUTION_MODE.MANUAL_PULL &&
+                  userHasVoted &&
+                  !userHasClaimed && (
+                    <Button
+                      className="w-full bg-green-600 hover:bg-green-700 text-white"
+                      onClick={handleClaim}
+                      disabled={isClaiming || contractLoading}
+                    >
+                      {isClaiming ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Claiming...
+                        </>
+                      ) : (
+                        <>
+                          <Gift className="w-4 h-4 mr-2" /> Claim Reward
+                        </>
+                      )}
+                    </Button>
+                  )}
+
+                {/* Already claimed message */}
+                {poll.status === POLL_STATUS.CLAIMING && userHasClaimed && (
+                  <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/20 text-green-600 text-sm flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4" />
+                    You have claimed your reward
+                  </div>
+                )}
+
+                {/* Distribute Button - for creator in Manual Push mode when status is CLOSED */}
+                {poll.status === POLL_STATUS.CLOSED &&
+                  poll.distribution_mode === DISTRIBUTION_MODE.MANUAL_PUSH &&
+                  isCreator &&
+                  !poll.rewards_distributed && (
+                    <Button
+                      className="w-full bg-primary hover:bg-primary/90"
+                      onClick={handleDistribute}
+                      disabled={isDistributing || contractLoading}
+                    >
+                      {isDistributing ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Distributing...
+                        </>
+                      ) : (
+                        <>
+                          <Send className="w-4 h-4 mr-2" /> Distribute to All ({poll.totalVotes})
+                        </>
+                      )}
+                    </Button>
+                  )}
+
+                {/* Close Poll Button - for creator when poll is still active */}
+                {poll.status === POLL_STATUS.ACTIVE && isCreator && (
+                  <Button
+                    variant="outline"
+                    className="w-full border-destructive/50 text-destructive hover:bg-destructive/10"
+                    onClick={() => setIsClosePollModalOpen(true)}
+                    disabled={isClosing || contractLoading}
+                  >
+                    <XCircle className="w-4 h-4 mr-2" /> Close Poll
+                  </Button>
+                )}
+
+                {/* Info text based on status */}
+                {poll.status === POLL_STATUS.ACTIVE && rewardPoolMove > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Rewards will be available after the poll closes.
+                  </p>
+                )}
+                {poll.status === POLL_STATUS.CLAIMING && !userHasVoted && (
+                  <p className="text-xs text-muted-foreground">
+                    Only voters can claim rewards.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Poll Info Card */}
           <Card>
             <CardHeader>
               <CardTitle>Poll Info</CardTitle>
@@ -335,15 +572,126 @@ export default function PollDetails() {
                 </li>
                 <li className="flex items-center justify-between">
                   <span className="text-muted-foreground">Status</span>
-                  <Badge variant={poll.isActive ? "default" : "secondary"}>
-                    {poll.isActive ? "Active" : "Closed"}
+                  <Badge variant={statusInfo.variant} className={statusInfo.className}>
+                    {statusInfo.label}
                   </Badge>
+                </li>
+                <li className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Claims</span>
+                  <span className="font-mono">{poll.claimed.length}/{poll.totalVotes}</span>
                 </li>
               </ul>
             </CardContent>
           </Card>
         </div>
       </div>
+
+      {/* Close Poll Modal */}
+      <Dialog open={isClosePollModalOpen} onOpenChange={setIsClosePollModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Close Poll & Select Distribution Mode</DialogTitle>
+            <DialogDescription>
+              Choose how rewards will be distributed to voters. This cannot be changed after closing.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <RadioGroup
+              value={selectedDistributionMode.toString()}
+              onValueChange={(value) => setSelectedDistributionMode(parseInt(value, 10))}
+              className="gap-4"
+            >
+              {/* Manual Pull Option */}
+              <div
+                className={`flex items-start space-x-3 border rounded-lg p-4 cursor-pointer transition-colors ${
+                  selectedDistributionMode === DISTRIBUTION_MODE.MANUAL_PULL
+                    ? "border-primary bg-primary/5"
+                    : "border-border hover:bg-muted/50"
+                }`}
+                onClick={() => setSelectedDistributionMode(DISTRIBUTION_MODE.MANUAL_PULL)}
+              >
+                <RadioGroupItem value={DISTRIBUTION_MODE.MANUAL_PULL.toString()} id="pull" className="mt-1" />
+                <div className="flex-1">
+                  <Label htmlFor="pull" className="flex items-center gap-2 font-semibold cursor-pointer">
+                    <HandCoins className="w-4 h-4 text-primary" />
+                    Voters Claim (Pull)
+                  </Label>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Each voter can claim their own reward. Unclaimed funds can be withdrawn later.
+                  </p>
+                </div>
+              </div>
+
+              {/* Manual Push Option */}
+              <div
+                className={`flex items-start space-x-3 border rounded-lg p-4 cursor-pointer transition-colors ${
+                  selectedDistributionMode === DISTRIBUTION_MODE.MANUAL_PUSH
+                    ? "border-primary bg-primary/5"
+                    : "border-border hover:bg-muted/50"
+                }`}
+                onClick={() => setSelectedDistributionMode(DISTRIBUTION_MODE.MANUAL_PUSH)}
+              >
+                <RadioGroupItem value={DISTRIBUTION_MODE.MANUAL_PUSH.toString()} id="push" className="mt-1" />
+                <div className="flex-1">
+                  <Label htmlFor="push" className="flex items-center gap-2 font-semibold cursor-pointer">
+                    <Users className="w-4 h-4 text-primary" />
+                    Distribute to All (Push)
+                  </Label>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    You distribute rewards to all voters in a single transaction.
+                  </p>
+                </div>
+              </div>
+            </RadioGroup>
+
+            {/* Reward Summary */}
+            {rewardPoolMove > 0 && (
+              <div className="bg-muted/50 rounded-lg p-3 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Total Reward Pool</span>
+                  <span className="font-mono font-semibold">{rewardPoolMove.toFixed(4)} MOVE</span>
+                </div>
+                <div className="flex justify-between mt-1">
+                  <span className="text-muted-foreground">Voters</span>
+                  <span className="font-mono">{poll.totalVotes}</span>
+                </div>
+                {poll.totalVotes > 0 && (
+                  <div className="flex justify-between mt-1">
+                    <span className="text-muted-foreground">Per Voter</span>
+                    <span className="font-mono text-green-600">~{estimatedRewardPerVoter.toFixed(4)} MOVE</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={() => setIsClosePollModalOpen(false)}
+              disabled={isClosing}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleClosePoll}
+              disabled={isClosing || contractLoading}
+              className="bg-destructive hover:bg-destructive/90"
+            >
+              {isClosing ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Closing...
+                </>
+              ) : (
+                <>
+                  <XCircle className="w-4 h-4 mr-2" /> Close Poll
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
