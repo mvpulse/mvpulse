@@ -77,7 +77,7 @@ export default function Dashboard() {
     activePolls: role === "creator" ? myActivePolls.length : activePolls.length,
     totalVotes: (role === "creator" ? myPolls : polls).reduce((sum, p) => sum + p.totalVotes, 0),
     totalRewards: (role === "creator" ? myPolls : polls).reduce(
-      (sum, p) => sum + (p.reward_per_vote / 1e8) * p.totalVotes,
+      (sum, p) => sum + (p.reward_pool / 1e8),
       0
     ),
     pollCount: role === "creator" ? myPolls.length : polls.length,
@@ -92,7 +92,7 @@ export default function Dashboard() {
 
   // Render poll card from PollWithMeta
   const renderPollCard = (poll: PollWithMeta) => {
-    const rewardMove = poll.reward_per_vote / 1e8;
+    const rewardPoolMove = poll.reward_pool / 1e8;
     return (
       <PollCard
         key={poll.id}
@@ -101,7 +101,7 @@ export default function Dashboard() {
         description={poll.description}
         votes={poll.totalVotes}
         timeLeft={poll.timeRemaining}
-        reward={rewardMove > 0 ? `${rewardMove.toFixed(2)} MOVE` : undefined}
+        reward={rewardPoolMove > 0 ? `${rewardPoolMove.toFixed(2)} MOVE` : undefined}
         status={poll.isActive ? "active" : "closed"}
         tags={[]}
       />

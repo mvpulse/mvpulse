@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo } from "react";
 import { useWallet } from "@aptos-labs/wallet-adapter-react";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { createAptosClient, getFunctionId, formatTimeRemaining, isPollActive } from "@/lib/contract";
-import type { Poll, PollWithMeta, CreatePollInput, VoteInput, TransactionResult } from "@/types/poll";
+import type { Poll, PollWithMeta, CreatePollInput, VoteInput, TransactionResult, PlatformConfig } from "@/types/poll";
 
 export function useContract() {
   const { config } = useNetwork();
@@ -29,6 +29,7 @@ export function useContract() {
   }, []);
 
   // Create a new poll
+  // Note: distribution_mode is now set when closing the poll, not at creation
   const createPoll = useCallback(
     async (input: CreatePollInput): Promise<TransactionResult> => {
       if (!signAndSubmitTransaction) {
@@ -49,7 +50,9 @@ export function useContract() {
               input.description,
               input.options,
               input.rewardPerVote.toString(),
+              input.maxVoters.toString(),
               input.durationSecs.toString(),
+              input.fundAmount.toString(),
             ],
           },
         });
@@ -60,6 +63,155 @@ export function useContract() {
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to create poll";
+        setError(message);
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [signAndSubmitTransaction, contractAddress]
+  );
+
+  // Fund an existing poll
+  const fundPoll = useCallback(
+    async (pollId: number, amount: number): Promise<TransactionResult> => {
+      if (!signAndSubmitTransaction) {
+        throw new Error("Wallet not connected");
+      }
+
+      setLoading(true);
+      setError(null);
+
+      try {
+        const response = await signAndSubmitTransaction({
+          data: {
+            function: getFunctionId(contractAddress, "fund_poll"),
+            typeArguments: [],
+            functionArguments: [
+              contractAddress,
+              pollId.toString(),
+              amount.toString(),
+            ],
+          },
+        });
+
+        return {
+          hash: response.hash,
+          success: true,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to fund poll";
+        setError(message);
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [signAndSubmitTransaction, contractAddress]
+  );
+
+  // Claim reward (for Manual Pull mode)
+  const claimReward = useCallback(
+    async (pollId: number): Promise<TransactionResult> => {
+      if (!signAndSubmitTransaction) {
+        throw new Error("Wallet not connected");
+      }
+
+      setLoading(true);
+      setError(null);
+
+      try {
+        const response = await signAndSubmitTransaction({
+          data: {
+            function: getFunctionId(contractAddress, "claim_reward"),
+            typeArguments: [],
+            functionArguments: [
+              contractAddress,
+              pollId.toString(),
+            ],
+          },
+        });
+
+        return {
+          hash: response.hash,
+          success: true,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to claim reward";
+        setError(message);
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [signAndSubmitTransaction, contractAddress]
+  );
+
+  // Distribute rewards to all voters (for Manual Push mode)
+  const distributeRewards = useCallback(
+    async (pollId: number): Promise<TransactionResult> => {
+      if (!signAndSubmitTransaction) {
+        throw new Error("Wallet not connected");
+      }
+
+      setLoading(true);
+      setError(null);
+
+      try {
+        const response = await signAndSubmitTransaction({
+          data: {
+            function: getFunctionId(contractAddress, "distribute_rewards"),
+            typeArguments: [],
+            functionArguments: [
+              contractAddress,
+              pollId.toString(),
+            ],
+          },
+        });
+
+        return {
+          hash: response.hash,
+          success: true,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to distribute rewards";
+        setError(message);
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [signAndSubmitTransaction, contractAddress]
+  );
+
+  // Withdraw remaining funds from a poll
+  const withdrawRemaining = useCallback(
+    async (pollId: number): Promise<TransactionResult> => {
+      if (!signAndSubmitTransaction) {
+        throw new Error("Wallet not connected");
+      }
+
+      setLoading(true);
+      setError(null);
+
+      try {
+        const response = await signAndSubmitTransaction({
+          data: {
+            function: getFunctionId(contractAddress, "withdraw_remaining"),
+            typeArguments: [],
+            functionArguments: [
+              contractAddress,
+              pollId.toString(),
+            ],
+          },
+        });
+
+        return {
+          hash: response.hash,
+          success: true,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to withdraw funds";
         setError(message);
         throw err;
       } finally {
@@ -107,9 +259,10 @@ export function useContract() {
     [signAndSubmitTransaction, contractAddress]
   );
 
-  // Close a poll
+  // Close a poll and set distribution mode
+  // distributionMode: 0 = Manual Pull (participants claim), 1 = Manual Push (creator distributes)
   const closePoll = useCallback(
-    async (pollId: number): Promise<TransactionResult> => {
+    async (pollId: number, distributionMode: number): Promise<TransactionResult> => {
       if (!signAndSubmitTransaction) {
         throw new Error("Wallet not connected");
       }
@@ -125,6 +278,7 @@ export function useContract() {
             functionArguments: [
               contractAddress, // registry_addr
               pollId.toString(),
+              distributionMode.toString(),
             ],
           },
         });
@@ -218,6 +372,30 @@ export function useContract() {
     [client, contractAddress, account?.address]
   );
 
+  // Check if user has claimed reward (view function)
+  const hasClaimed = useCallback(
+    async (pollId: number, claimerAddress?: string): Promise<boolean> => {
+      const address = claimerAddress || account?.address;
+      if (!contractAddress || !address) return false;
+
+      try {
+        const result = await client.view({
+          payload: {
+            function: getFunctionId(contractAddress, "has_claimed"),
+            typeArguments: [],
+            functionArguments: [contractAddress, pollId.toString(), address],
+          },
+        });
+
+        return Boolean(result && result[0]);
+      } catch (err) {
+        console.error("Failed to check claim status:", err);
+        return false;
+      }
+    },
+    [client, contractAddress, account?.address]
+  );
+
   // Get all polls (fetches each poll individually)
   const getAllPolls = useCallback(async (): Promise<PollWithMeta[]> => {
     const count = await getPollCount();
@@ -234,6 +412,33 @@ export function useContract() {
     return polls;
   }, [getPollCount, getPoll]);
 
+  // Get platform configuration (view function)
+  const getPlatformConfig = useCallback(async (): Promise<PlatformConfig | null> => {
+    if (!contractAddress) return null;
+
+    try {
+      const result = await client.view({
+        payload: {
+          function: getFunctionId(contractAddress, "get_platform_config"),
+          typeArguments: [],
+          functionArguments: [contractAddress],
+        },
+      });
+
+      if (result && result.length >= 3) {
+        return {
+          feeBps: Number(result[0]),
+          treasury: String(result[1]),
+          totalFeesCollected: Number(result[2]),
+        };
+      }
+      return null;
+    } catch (err) {
+      console.error("Failed to get platform config:", err);
+      return null;
+    }
+  }, [client, contractAddress]);
+
   return {
     // State
     loading,
@@ -244,12 +449,18 @@ export function useContract() {
     createPoll,
     vote,
     closePoll,
+    fundPoll,
+    claimReward,
+    distributeRewards,
+    withdrawRemaining,
 
     // Read functions
     getPoll,
     getPollCount,
     hasVoted,
+    hasClaimed,
     getAllPolls,
+    getPlatformConfig,
 
     // Helpers
     enrichPoll,
