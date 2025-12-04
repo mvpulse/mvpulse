@@ -3,18 +3,19 @@
  * Supports multiple coin types (MOVE, PULSE)
  */
 
-import { CoinTypeId, COIN_TYPES, getCoinTypeArg, getCoinSymbol } from "./tokens";
+import { CoinTypeId, COIN_TYPES, getCoinTypeArg, getCoinSymbol, getCoinDecimals } from "./tokens";
 
 export interface AccountBalance {
-  balance: number; // In octas (1 token = 100,000,000 octas)
+  balance: number; // In smallest unit (octas for MOVE/PULSE, micro for USDC)
   balanceFormatted: string; // Human readable format
   exists: boolean;
-  symbol: string; // Token symbol (MOVE or PULSE)
+  symbol: string; // Token symbol (MOVE, PULSE, or USDC)
 }
 
 export interface AllBalances {
   [COIN_TYPES.MOVE]: AccountBalance;
   [COIN_TYPES.PULSE]: AccountBalance;
+  [COIN_TYPES.USDC]: AccountBalance;
 }
 
 /**
@@ -65,10 +66,11 @@ export async function getAccountBalance(
 
     const data = await response.json();
     const balance = parseInt(data.data.coin.value, 10);
+    const decimals = getCoinDecimals(coinTypeId);
 
     return {
       balance,
-      balanceFormatted: formatBalance(balance),
+      balanceFormatted: formatBalance(balance, decimals),
       exists: true,
       symbol,
     };
@@ -94,25 +96,33 @@ export async function getAllBalances(
   rpcUrl: string,
   network: "testnet" | "mainnet" = "testnet"
 ): Promise<AllBalances> {
-  const [moveBalance, pulseBalance] = await Promise.all([
+  const [moveBalance, pulseBalance, usdcBalance] = await Promise.all([
     getAccountBalance(address, rpcUrl, COIN_TYPES.MOVE, network),
     getAccountBalance(address, rpcUrl, COIN_TYPES.PULSE, network),
+    getAccountBalance(address, rpcUrl, COIN_TYPES.USDC, network),
   ]);
 
   return {
     [COIN_TYPES.MOVE]: moveBalance,
     [COIN_TYPES.PULSE]: pulseBalance,
+    [COIN_TYPES.USDC]: usdcBalance,
   };
 }
 
 /**
- * Format balance from octas to human readable with proper decimals
- * @param octas - Balance in octas
- * @param decimals - Number of decimal places (default: 4)
+ * Format balance from smallest unit to human readable with proper decimals
+ * @param smallestUnit - Balance in smallest unit (octas for 8 decimals, micro for 6)
+ * @param tokenDecimals - Number of decimals the token uses (8 for MOVE/PULSE, 6 for USDC)
+ * @param displayDecimals - Number of decimal places to show (default: 4)
  */
-export function formatBalance(octas: number, decimals: number = 4): string {
-  const amount = octas / 100_000_000;
-  return amount.toFixed(decimals);
+export function formatBalance(
+  smallestUnit: number,
+  tokenDecimals: number = 8,
+  displayDecimals: number = 4
+): string {
+  const divisor = Math.pow(10, tokenDecimals);
+  const amount = smallestUnit / divisor;
+  return amount.toFixed(displayDecimals);
 }
 
 /**

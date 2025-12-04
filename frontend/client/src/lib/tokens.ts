@@ -1,24 +1,35 @@
 /**
  * Token configuration for MVPulse
- * Supports multiple coin types (MOVE, PULSE)
+ * Supports multiple coin types (MOVE, PULSE, USDC)
  */
 
 export const COIN_TYPES = {
   MOVE: 0,
   PULSE: 1,
+  USDC: 2,
 } as const;
 
 export type CoinTypeId = (typeof COIN_TYPES)[keyof typeof COIN_TYPES];
 
-// Network-specific PULSE contract addresses
+// Network-specific contract addresses
 const PULSE_ADDRESSES: Record<"testnet" | "mainnet", string> = {
   testnet: import.meta.env.VITE_TESTNET_PULSE_CONTRACT_ADDRESS || "",
   mainnet: import.meta.env.VITE_MAINNET_PULSE_CONTRACT_ADDRESS || "",
 };
 
+const USDC_ADDRESSES: Record<"testnet" | "mainnet", string> = {
+  testnet: import.meta.env.VITE_TESTNET_USDC_CONTRACT_ADDRESS || "",
+  mainnet: import.meta.env.VITE_MAINNET_USDC_CONTRACT_ADDRESS || "",
+};
+
+const SWAP_ADDRESSES: Record<"testnet" | "mainnet", string> = {
+  testnet: import.meta.env.VITE_TESTNET_SWAP_CONTRACT_ADDRESS || "",
+  mainnet: import.meta.env.VITE_MAINNET_SWAP_CONTRACT_ADDRESS || "",
+};
+
 /**
  * Get the full type argument string for a coin type
- * @param coinTypeId - The coin type identifier (0 = MOVE, 1 = PULSE)
+ * @param coinTypeId - The coin type identifier (0 = MOVE, 1 = PULSE, 2 = USDC)
  * @param network - The network (testnet or mainnet)
  * @returns The full type argument string for Move transactions
  */
@@ -26,29 +37,76 @@ export function getCoinTypeArg(
   coinTypeId: CoinTypeId,
   network: "testnet" | "mainnet"
 ): string {
-  if (coinTypeId === COIN_TYPES.MOVE) {
-    return "0x1::aptos_coin::AptosCoin";
+  switch (coinTypeId) {
+    case COIN_TYPES.MOVE:
+      return "0x1::aptos_coin::AptosCoin";
+    case COIN_TYPES.PULSE: {
+      const pulseAddress = PULSE_ADDRESSES[network];
+      if (!pulseAddress) {
+        console.warn(`PULSE contract address not configured for ${network}`);
+        return "";
+      }
+      return `${pulseAddress}::pulse::PULSE`;
+    }
+    case COIN_TYPES.USDC: {
+      const usdcAddress = USDC_ADDRESSES[network];
+      if (!usdcAddress) {
+        console.warn(`USDC contract address not configured for ${network}`);
+        return "";
+      }
+      return `${usdcAddress}::usdc::USDC`;
+    }
+    default:
+      return "";
   }
-  const pulseAddress = PULSE_ADDRESSES[network];
-  if (!pulseAddress) {
-    console.warn(`PULSE contract address not configured for ${network}`);
-    return "";
-  }
-  return `${pulseAddress}::pulse::PULSE`;
 }
 
 /**
  * Get the display symbol for a coin type
  */
 export function getCoinSymbol(coinTypeId: CoinTypeId): string {
-  return coinTypeId === COIN_TYPES.MOVE ? "MOVE" : "PULSE";
+  switch (coinTypeId) {
+    case COIN_TYPES.MOVE:
+      return "MOVE";
+    case COIN_TYPES.PULSE:
+      return "PULSE";
+    case COIN_TYPES.USDC:
+      return "USDC";
+    default:
+      return "UNKNOWN";
+  }
 }
 
 /**
  * Get the full display name for a coin type
  */
 export function getCoinName(coinTypeId: CoinTypeId): string {
-  return coinTypeId === COIN_TYPES.MOVE ? "Move Token" : "Pulse Token";
+  switch (coinTypeId) {
+    case COIN_TYPES.MOVE:
+      return "Move Token";
+    case COIN_TYPES.PULSE:
+      return "Pulse Token";
+    case COIN_TYPES.USDC:
+      return "USD Coin";
+    default:
+      return "Unknown Token";
+  }
+}
+
+/**
+ * Get the number of decimals for a coin type
+ */
+export function getCoinDecimals(coinTypeId: CoinTypeId): number {
+  switch (coinTypeId) {
+    case COIN_TYPES.MOVE:
+      return 8;
+    case COIN_TYPES.PULSE:
+      return 8;
+    case COIN_TYPES.USDC:
+      return 6; // USDC uses 6 decimals
+    default:
+      return 8;
+  }
 }
 
 /**
@@ -78,6 +136,13 @@ export const COIN_METADATA: Record<
     decimals: 8,
     description: "MVPulse governance and rewards token",
   },
+  [COIN_TYPES.USDC]: {
+    id: COIN_TYPES.USDC,
+    symbol: "USDC",
+    name: "USD Coin",
+    decimals: 6,
+    description: "USD-pegged stablecoin",
+  },
 };
 
 /**
@@ -91,7 +156,11 @@ export function getSupportedCoinTypes(): typeof COIN_METADATA {
  * Check if a coin type ID is valid
  */
 export function isValidCoinType(coinTypeId: number): coinTypeId is CoinTypeId {
-  return coinTypeId === COIN_TYPES.MOVE || coinTypeId === COIN_TYPES.PULSE;
+  return (
+    coinTypeId === COIN_TYPES.MOVE ||
+    coinTypeId === COIN_TYPES.PULSE ||
+    coinTypeId === COIN_TYPES.USDC
+  );
 }
 
 /**
@@ -106,4 +175,11 @@ export function getCoinStoreType(
 ): string {
   const coinTypeArg = getCoinTypeArg(coinTypeId, network);
   return `0x1::coin::CoinStore<${coinTypeArg}>`;
+}
+
+/**
+ * Get the swap contract address for a network
+ */
+export function getSwapContractAddress(network: "testnet" | "mainnet"): string {
+  return SWAP_ADDRESSES[network];
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -14,12 +15,14 @@ import {
   CheckCircle2,
   Loader2,
   Droplets,
+  ArrowDownUp,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useWalletConnection } from "@/hooks/useWalletConnection";
 import { usePrivyWallet } from "@/hooks/usePrivyWallet";
 import { useNetwork } from "@/contexts/NetworkContext";
-import { getAccountBalance, type AccountBalance } from "@/lib/balance";
+import { getAllBalances, type AllBalances } from "@/lib/balance";
+import { COIN_TYPES } from "@/lib/tokens";
 import { WalletSelectionModal } from "@/components/WalletSelectionModal";
 
 export default function WalletPage() {
@@ -27,32 +30,32 @@ export default function WalletPage() {
   const { isFunding, isAccountFunded, fundWallet, displayName } = usePrivyWallet();
   const { network, config } = useNetwork();
 
-  const [balance, setBalance] = useState<AccountBalance | null>(null);
+  const [balances, setBalances] = useState<AllBalances | null>(null);
   const [isLoadingBalance, setIsLoadingBalance] = useState(false);
 
   const isTestnet = network === "testnet";
 
-  // Fetch balance
+  // Fetch all balances
   const fetchBalance = useCallback(async () => {
     if (!address) return;
 
     setIsLoadingBalance(true);
     try {
-      const balanceData = await getAccountBalance(address, config.rpcUrl);
-      setBalance(balanceData);
+      const balanceData = await getAllBalances(address, config.rpcUrl, network);
+      setBalances(balanceData);
     } catch (error) {
-      console.error("Failed to fetch balance:", error);
+      console.error("Failed to fetch balances:", error);
     } finally {
       setIsLoadingBalance(false);
     }
-  }, [address, config.rpcUrl]);
+  }, [address, config.rpcUrl, network]);
 
-  // Fetch balance on mount and when address changes
+  // Fetch balances on mount and when address changes
   useEffect(() => {
     if (address) {
       fetchBalance();
     } else {
-      setBalance(null);
+      setBalances(null);
     }
   }, [address, fetchBalance]);
 
@@ -157,10 +160,10 @@ export default function WalletPage() {
             </div>
           </div>
 
-          {/* Balance */}
+          {/* Balances */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label className="text-sm text-muted-foreground">Balance</label>
+              <label className="text-sm text-muted-foreground">Balances</label>
               <Button
                 variant="ghost"
                 size="sm"
@@ -171,23 +174,54 @@ export default function WalletPage() {
                 Refresh
               </Button>
             </div>
-            <div className="flex items-center gap-3 p-4 bg-muted/50 rounded-lg">
-              <Coins className="w-8 h-8 text-primary" />
-              {isLoadingBalance ? (
-                <Skeleton className="h-10 w-32" />
-              ) : (
-                <div>
-                  <p className="text-3xl font-bold font-mono">
-                    {balance?.balanceFormatted ?? "0.0000"}
-                  </p>
-                  <p className="text-sm text-muted-foreground">MOVE</p>
-                </div>
-              )}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {/* MOVE Balance */}
+              <div className="flex items-center gap-3 p-4 bg-muted/50 rounded-lg">
+                <Coins className="w-8 h-8 text-blue-500" />
+                {isLoadingBalance ? (
+                  <Skeleton className="h-10 w-24" />
+                ) : (
+                  <div>
+                    <p className="text-2xl font-bold font-mono">
+                      {balances?.[COIN_TYPES.MOVE]?.balanceFormatted ?? "0.0000"}
+                    </p>
+                    <p className="text-sm text-muted-foreground">MOVE</p>
+                  </div>
+                )}
+              </div>
+              {/* PULSE Balance */}
+              <div className="flex items-center gap-3 p-4 bg-purple-500/10 border border-purple-500/20 rounded-lg">
+                <Coins className="w-8 h-8 text-purple-500" />
+                {isLoadingBalance ? (
+                  <Skeleton className="h-10 w-24" />
+                ) : (
+                  <div>
+                    <p className="text-2xl font-bold font-mono">
+                      {balances?.[COIN_TYPES.PULSE]?.balanceFormatted ?? "0.0000"}
+                    </p>
+                    <p className="text-sm text-purple-500">PULSE</p>
+                  </div>
+                )}
+              </div>
+              {/* USDC Balance */}
+              <div className="flex items-center gap-3 p-4 bg-green-500/10 border border-green-500/20 rounded-lg">
+                <Coins className="w-8 h-8 text-green-500" />
+                {isLoadingBalance ? (
+                  <Skeleton className="h-10 w-24" />
+                ) : (
+                  <div>
+                    <p className="text-2xl font-bold font-mono">
+                      {balances?.[COIN_TYPES.USDC]?.balanceFormatted ?? "0.0000"}
+                    </p>
+                    <p className="text-sm text-green-500">USDC</p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
           {/* Account Status */}
-          {balance && !balance.exists && (
+          {balances && !balances[COIN_TYPES.MOVE]?.exists && (
             <Alert variant="default" className="border-yellow-500/50 bg-yellow-500/10">
               <AlertTriangle className="h-4 w-4 text-yellow-500" />
               <AlertDescription className="text-yellow-600 dark:text-yellow-400">
@@ -256,16 +290,51 @@ export default function WalletPage() {
         </Alert>
       )}
 
+      {/* Swap Card */}
+      <Card className="border-purple-500/20 bg-gradient-to-br from-purple-500/5 to-transparent">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ArrowDownUp className="w-5 h-5 text-purple-500" />
+            Swap Tokens
+          </CardTitle>
+          <CardDescription>
+            Trade PULSE and USDC tokens instantly
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between p-4 bg-purple-500/10 rounded-lg">
+            <div>
+              <p className="font-medium">PULSE / USDC</p>
+              <p className="text-sm text-muted-foreground">
+                Swap with low fees using our AMM
+              </p>
+            </div>
+            <Link href="/swap">
+              <Button className="bg-purple-600 hover:bg-purple-700">
+                <ArrowDownUp className="w-4 h-4 mr-2" />
+                Go to Swap
+              </Button>
+            </Link>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Quick Links */}
       <Card>
         <CardHeader>
           <CardTitle>Quick Links</CardTitle>
         </CardHeader>
-        <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Button variant="outline" className="justify-start" onClick={openExplorer}>
             <ExternalLink className="w-4 h-4 mr-2" />
             View on Explorer
           </Button>
+          <Link href="/swap">
+            <Button variant="outline" className="w-full justify-start">
+              <ArrowDownUp className="w-4 h-4 mr-2" />
+              Token Swap
+            </Button>
+          </Link>
           <Button
             variant="outline"
             className="justify-start"
