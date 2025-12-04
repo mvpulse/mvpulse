@@ -1,9 +1,18 @@
 /**
  * Balance fetching utilities for Movement network
- * Supports multiple coin types (MOVE, PULSE)
+ * Supports legacy coins (MOVE) and Fungible Assets (PULSE, USDC)
  */
 
-import { CoinTypeId, COIN_TYPES, getCoinTypeArg, getCoinSymbol, getCoinDecimals } from "./tokens";
+import {
+  CoinTypeId,
+  COIN_TYPES,
+  getCoinTypeArg,
+  getCoinSymbol,
+  getCoinDecimals,
+  getTokenStandard,
+  getPulseContractAddress,
+  getUsdcContractAddress,
+} from "./tokens";
 
 export interface AccountBalance {
   balance: number; // In smallest unit (octas for MOVE/PULSE, micro for USDC)
@@ -19,24 +28,19 @@ export interface AllBalances {
 }
 
 /**
- * Fetch the balance for a specific coin type
- * @param address - The account address
- * @param rpcUrl - The RPC endpoint URL
- * @param coinTypeId - The coin type (0 = MOVE, 1 = PULSE)
- * @param network - The network (testnet or mainnet)
+ * Fetch the balance for a legacy coin (e.g., MOVE)
  */
-export async function getAccountBalance(
+async function getLegacyCoinBalance(
   address: string,
   rpcUrl: string,
-  coinTypeId: CoinTypeId = COIN_TYPES.MOVE,
-  network: "testnet" | "mainnet" = "testnet"
+  coinTypeId: CoinTypeId,
+  network: "testnet" | "mainnet"
 ): Promise<AccountBalance> {
   const symbol = getCoinSymbol(coinTypeId);
 
   try {
     const coinTypeArg = getCoinTypeArg(coinTypeId, network);
 
-    // If coin type arg is empty (PULSE not configured), return empty balance
     if (!coinTypeArg) {
       return {
         balance: 0,
@@ -53,7 +57,6 @@ export async function getAccountBalance(
 
     if (!response.ok) {
       if (response.status === 404) {
-        // Account doesn't exist or has no coins of this type
         return {
           balance: 0,
           balanceFormatted: "0.0000",
@@ -86,7 +89,142 @@ export async function getAccountBalance(
 }
 
 /**
- * Fetch all balances (MOVE and PULSE) for an account
+ * Fetch the balance for a Fungible Asset (e.g., PULSE, USDC)
+ * Uses the view function API to query primary_fungible_store::balance
+ */
+async function getFABalance(
+  address: string,
+  rpcUrl: string,
+  coinTypeId: CoinTypeId,
+  network: "testnet" | "mainnet"
+): Promise<AccountBalance> {
+  const symbol = getCoinSymbol(coinTypeId);
+
+  try {
+    let metadataAddress: string;
+
+    if (coinTypeId === COIN_TYPES.PULSE) {
+      // For PULSE, we need to get the FA metadata address from the contract
+      const pulseContract = getPulseContractAddress(network);
+      if (!pulseContract) {
+        return {
+          balance: 0,
+          balanceFormatted: "0.0000",
+          exists: false,
+          symbol,
+        };
+      }
+
+      // First, get the PULSE metadata address using view function
+      const metadataResponse = await fetch(`${rpcUrl}/view`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          function: `${pulseContract}::pulse::get_metadata_address`,
+          type_arguments: [],
+          arguments: [],
+        }),
+      });
+
+      if (!metadataResponse.ok) {
+        // PULSE might not be initialized yet
+        return {
+          balance: 0,
+          balanceFormatted: "0.0000",
+          exists: false,
+          symbol,
+        };
+      }
+
+      const metadataResult = await metadataResponse.json();
+      metadataAddress = metadataResult[0];
+    } else if (coinTypeId === COIN_TYPES.USDC) {
+      // USDC.e FA metadata is at the contract address directly
+      metadataAddress = getUsdcContractAddress(network);
+      if (!metadataAddress) {
+        return {
+          balance: 0,
+          balanceFormatted: "0.0000",
+          exists: false,
+          symbol,
+        };
+      }
+    } else {
+      return {
+        balance: 0,
+        balanceFormatted: "0.0000",
+        exists: false,
+        symbol,
+      };
+    }
+
+    // Now fetch the balance using primary_fungible_store::balance view function
+    const balanceResponse = await fetch(`${rpcUrl}/view`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        function: "0x1::primary_fungible_store::balance",
+        type_arguments: ["0x1::fungible_asset::Metadata"],
+        arguments: [address, metadataAddress],
+      }),
+    });
+
+    if (!balanceResponse.ok) {
+      // Account might not have a store for this FA yet
+      return {
+        balance: 0,
+        balanceFormatted: "0.0000",
+        exists: false,
+        symbol,
+      };
+    }
+
+    const balanceResult = await balanceResponse.json();
+    const balance = parseInt(balanceResult[0], 10);
+    const decimals = getCoinDecimals(coinTypeId);
+
+    return {
+      balance,
+      balanceFormatted: formatBalance(balance, decimals),
+      exists: true,
+      symbol,
+    };
+  } catch (error) {
+    console.error(`Error fetching ${symbol} FA balance:`, error);
+    return {
+      balance: 0,
+      balanceFormatted: "0.0000",
+      exists: false,
+      symbol,
+    };
+  }
+}
+
+/**
+ * Fetch the balance for a specific coin type
+ * Automatically handles both legacy coins and Fungible Assets
+ * @param address - The account address
+ * @param rpcUrl - The RPC endpoint URL
+ * @param coinTypeId - The coin type (0 = MOVE, 1 = PULSE, 2 = USDC)
+ * @param network - The network (testnet or mainnet)
+ */
+export async function getAccountBalance(
+  address: string,
+  rpcUrl: string,
+  coinTypeId: CoinTypeId = COIN_TYPES.MOVE,
+  network: "testnet" | "mainnet" = "testnet"
+): Promise<AccountBalance> {
+  const standard = getTokenStandard(coinTypeId);
+
+  if (standard === "fungible_asset") {
+    return getFABalance(address, rpcUrl, coinTypeId, network);
+  } else {
+    return getLegacyCoinBalance(address, rpcUrl, coinTypeId, network);
+  }
+}
+
+/**
+ * Fetch all balances (MOVE, PULSE, USDC) for an account
  * @param address - The account address
  * @param rpcUrl - The RPC endpoint URL
  * @param network - The network (testnet or mainnet)
@@ -134,17 +272,27 @@ export function parseToOctas(amount: number): number {
 }
 
 /**
+ * Parse token amount to smallest unit based on decimals
+ * @param amount - Amount in tokens
+ * @param decimals - Number of decimals
+ */
+export function parseToSmallestUnit(amount: number, decimals: number = 8): number {
+  return Math.floor(amount * Math.pow(10, decimals));
+}
+
+/**
  * Format balance with symbol
- * @param octas - Balance in octas
+ * @param smallestUnit - Balance in smallest unit
  * @param coinTypeId - The coin type
- * @param decimals - Number of decimal places
+ * @param displayDecimals - Number of decimal places
  */
 export function formatBalanceWithSymbol(
-  octas: number,
+  smallestUnit: number,
   coinTypeId: CoinTypeId,
-  decimals: number = 4
+  displayDecimals: number = 4
 ): string {
-  const formatted = formatBalance(octas, decimals);
+  const tokenDecimals = getCoinDecimals(coinTypeId);
+  const formatted = formatBalance(smallestUnit, tokenDecimals, displayDecimals);
   const symbol = getCoinSymbol(coinTypeId);
   return `${formatted} ${symbol}`;
 }

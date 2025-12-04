@@ -1,6 +1,6 @@
 /// Poll module for MovePoll dApp
 /// Allows creating polls, voting, and distributing rewards
-/// Supports multiple coin types (MOVE, PULSE, etc.)
+/// Supports MOVE (legacy coin) and PULSE (Fungible Asset)
 module contracts::poll {
     use std::string::String;
     use std::vector;
@@ -9,6 +9,10 @@ module contracts::poll {
     use aptos_framework::event;
     use aptos_framework::coin;
     use aptos_framework::aptos_coin::AptosCoin;
+    use aptos_framework::object::{Self, Object};
+    use aptos_framework::fungible_asset::{Self, Metadata, FungibleStore};
+    use aptos_framework::primary_fungible_store;
+    use contracts::pulse;
 
     /// Error codes
     const E_NOT_OWNER: u64 = 1;
@@ -42,8 +46,8 @@ module contracts::poll {
     const DISTRIBUTION_MANUAL_PUSH: u8 = 1;   // Creator triggers distribution to all
 
     /// Coin type identifiers
-    const COIN_TYPE_APTOS: u8 = 0;    // AptosCoin (MOVE)
-    const COIN_TYPE_PULSE: u8 = 1;    // PULSE token
+    const COIN_TYPE_APTOS: u8 = 0;    // AptosCoin (MOVE) - legacy coin
+    const COIN_TYPE_PULSE: u8 = 1;    // PULSE token - Fungible Asset
 
     /// Fee constants
     const MAX_FEE_BPS: u64 = 1000;  // Max 10% fee
@@ -79,9 +83,15 @@ module contracts::poll {
         total_fees_collected: u64,    // Track total fees collected
     }
 
-    /// Reward vault to hold tokens for polls - generic over coin type
+    /// Reward vault for legacy coins (AptosCoin/MOVE)
     struct RewardVault<phantom CoinType> has key {
         coins: coin::Coin<CoinType>,
+    }
+
+    /// Reward vault for Fungible Assets (PULSE)
+    struct FARewardVault has key {
+        pulse_store: Object<FungibleStore>,
+        pulse_metadata: Object<Metadata>,
     }
 
     #[event]
@@ -131,7 +141,7 @@ module contracts::poll {
     }
 
     /// Initialize the poll registry (call once when deploying)
-    /// Also initializes the AptosCoin vault
+    /// Also initializes the AptosCoin vault and PULSE FA vault
     public entry fun initialize(account: &signer) {
         let admin_addr = signer::address_of(account);
         let registry = PollRegistry {
@@ -144,14 +154,25 @@ module contracts::poll {
         };
         move_to(account, registry);
 
-        // Initialize the reward vault for AptosCoin (default)
+        // Initialize the reward vault for AptosCoin (legacy coin)
         let vault = RewardVault<AptosCoin> {
             coins: coin::zero<AptosCoin>(),
         };
         move_to(account, vault);
+
+        // Initialize the FA reward vault for PULSE
+        let pulse_metadata = pulse::get_metadata();
+        let constructor_ref = object::create_object(admin_addr);
+        let pulse_store = fungible_asset::create_store(&constructor_ref, pulse_metadata);
+
+        let fa_vault = FARewardVault {
+            pulse_store,
+            pulse_metadata,
+        };
+        move_to(account, fa_vault);
     }
 
-    /// Initialize vault for additional coin types (call once per coin type)
+    /// Initialize vault for additional legacy coin types (call once per coin type)
     /// Only admin can call this
     public entry fun initialize_vault<CoinType>(
         account: &signer,
@@ -166,12 +187,8 @@ module contracts::poll {
         move_to(account, vault);
     }
 
-    /// Create a new poll with optional funding
-    /// reward_per_vote: Fixed amount per voter, or 0 for equal split mode
-    /// max_voters: Maximum number of voters (required for equal split, optional for fixed)
-    /// fund_amount: Total amount to deposit (includes platform fee)
-    /// coin_type_id: 0 = AptosCoin (MOVE), 1 = PULSE
-    public entry fun create_poll<CoinType>(
+    /// Create a new poll with MOVE (AptosCoin) rewards
+    public entry fun create_poll_with_move(
         account: &signer,
         registry_addr: address,
         title: String,
@@ -181,13 +198,9 @@ module contracts::poll {
         max_voters: u64,
         duration_secs: u64,
         fund_amount: u64,
-        coin_type_id: u8,
     ) acquires PollRegistry, RewardVault {
         let creator = signer::address_of(account);
         let registry = borrow_global_mut<PollRegistry>(registry_addr);
-
-        // Validate coin_type_id
-        assert!(coin_type_id <= COIN_TYPE_PULSE, E_INVALID_COIN_TYPE);
 
         // Calculate and collect platform fee
         let reward_pool = 0u64;
@@ -200,18 +213,102 @@ module contracts::poll {
 
             // Transfer fee to treasury
             if (platform_fee > 0) {
-                let fee_coins = coin::withdraw<CoinType>(account, platform_fee);
+                let fee_coins = coin::withdraw<AptosCoin>(account, platform_fee);
                 coin::deposit(registry.platform_treasury, fee_coins);
                 registry.total_fees_collected = registry.total_fees_collected + platform_fee;
             };
 
             // Transfer net amount to vault
-            let vault = borrow_global_mut<RewardVault<CoinType>>(registry_addr);
-            let payment = coin::withdraw<CoinType>(account, net_amount);
+            let vault = borrow_global_mut<RewardVault<AptosCoin>>(registry_addr);
+            let payment = coin::withdraw<AptosCoin>(account, net_amount);
             coin::merge(&mut vault.coins, payment);
             reward_pool = net_amount;
         };
 
+        create_poll_internal(
+            registry,
+            creator,
+            title,
+            description,
+            options,
+            reward_per_vote,
+            max_voters,
+            duration_secs,
+            reward_pool,
+            platform_fee,
+            COIN_TYPE_APTOS,
+        );
+    }
+
+    /// Create a new poll with PULSE (Fungible Asset) rewards
+    public entry fun create_poll_with_pulse(
+        account: &signer,
+        registry_addr: address,
+        title: String,
+        description: String,
+        options: vector<String>,
+        reward_per_vote: u64,
+        max_voters: u64,
+        duration_secs: u64,
+        fund_amount: u64,
+    ) acquires PollRegistry, FARewardVault {
+        let creator = signer::address_of(account);
+        let registry = borrow_global_mut<PollRegistry>(registry_addr);
+
+        // Calculate and collect platform fee
+        let reward_pool = 0u64;
+        let platform_fee = 0u64;
+
+        if (fund_amount > 0) {
+            // Calculate fee
+            platform_fee = (fund_amount * registry.platform_fee_bps) / 10000;
+            let net_amount = fund_amount - platform_fee;
+
+            let pulse_metadata = pulse::get_metadata();
+
+            // Transfer fee to treasury
+            if (platform_fee > 0) {
+                let fee_fa = primary_fungible_store::withdraw(account, pulse_metadata, platform_fee);
+                primary_fungible_store::deposit(registry.platform_treasury, fee_fa);
+                registry.total_fees_collected = registry.total_fees_collected + platform_fee;
+            };
+
+            // Transfer net amount to FA vault
+            let fa_vault = borrow_global<FARewardVault>(registry_addr);
+            let payment = primary_fungible_store::withdraw(account, pulse_metadata, net_amount);
+            fungible_asset::deposit(fa_vault.pulse_store, payment);
+            reward_pool = net_amount;
+        };
+
+        create_poll_internal(
+            registry,
+            creator,
+            title,
+            description,
+            options,
+            reward_per_vote,
+            max_voters,
+            duration_secs,
+            reward_pool,
+            platform_fee,
+            COIN_TYPE_PULSE,
+        );
+    }
+
+    /// Internal function to create a poll (shared logic)
+    fun create_poll_internal(
+        registry: &mut PollRegistry,
+        creator: address,
+        title: String,
+        description: String,
+        options: vector<String>,
+        reward_per_vote: u64,
+        max_voters: u64,
+        duration_secs: u64,
+        reward_pool: u64,
+        platform_fee: u64,
+        coin_type_id: u8,
+    ) {
         let poll_id = registry.next_id;
         let num_options = vector::length(&options);
         let votes = vector::empty<u64>();
@@ -234,7 +331,7 @@ module contracts::poll {
             reward_per_vote,
             reward_pool,
             max_voters,
-            distribution_mode: DISTRIBUTION_UNSET,  // Will be set when closing
+            distribution_mode: DISTRIBUTION_UNSET,
             claimed: vector::empty(),
             rewards_distributed: false,
             end_time: timestamp::now_seconds() + duration_secs,
@@ -256,8 +353,8 @@ module contracts::poll {
         });
     }
 
-    /// Add funds to an existing poll (only creator can add funds)
-    public entry fun fund_poll<CoinType>(
+    /// Add MOVE funds to an existing poll (only creator can add funds)
+    public entry fun fund_poll_with_move(
         account: &signer,
         registry_addr: address,
         poll_id: u64,
@@ -270,6 +367,7 @@ module contracts::poll {
         let poll = vector::borrow_mut(&mut registry.polls, poll_id);
         assert!(poll.creator == caller, E_NOT_OWNER);
         assert!(poll.status == STATUS_ACTIVE, E_POLL_CLOSED);
+        assert!(poll.coin_type_id == COIN_TYPE_APTOS, E_COIN_TYPE_MISMATCH);
 
         // Calculate and collect platform fee
         let platform_fee = (amount * registry.platform_fee_bps) / 10000;
@@ -277,15 +375,52 @@ module contracts::poll {
 
         // Transfer fee to treasury
         if (platform_fee > 0) {
-            let fee_coins = coin::withdraw<CoinType>(account, platform_fee);
+            let fee_coins = coin::withdraw<AptosCoin>(account, platform_fee);
             coin::deposit(registry.platform_treasury, fee_coins);
             registry.total_fees_collected = registry.total_fees_collected + platform_fee;
         };
 
         // Transfer net amount to vault
-        let vault = borrow_global_mut<RewardVault<CoinType>>(registry_addr);
-        let payment = coin::withdraw<CoinType>(account, net_amount);
+        let vault = borrow_global_mut<RewardVault<AptosCoin>>(registry_addr);
+        let payment = coin::withdraw<AptosCoin>(account, net_amount);
         coin::merge(&mut vault.coins, payment);
+
+        poll.reward_pool = poll.reward_pool + net_amount;
+    }
+
+    /// Add PULSE funds to an existing poll (only creator can add funds)
+    public entry fun fund_poll_with_pulse(
+        account: &signer,
+        registry_addr: address,
+        poll_id: u64,
+        amount: u64,
+    ) acquires PollRegistry, FARewardVault {
+        let caller = signer::address_of(account);
+        let registry = borrow_global_mut<PollRegistry>(registry_addr);
+
+        assert!(poll_id < vector::length(&registry.polls), E_POLL_NOT_FOUND);
+        let poll = vector::borrow_mut(&mut registry.polls, poll_id);
+        assert!(poll.creator == caller, E_NOT_OWNER);
+        assert!(poll.status == STATUS_ACTIVE, E_POLL_CLOSED);
+        assert!(poll.coin_type_id == COIN_TYPE_PULSE, E_COIN_TYPE_MISMATCH);
+
+        // Calculate and collect platform fee
+        let platform_fee = (amount * registry.platform_fee_bps) / 10000;
+        let net_amount = amount - platform_fee;
+
+        let pulse_metadata = pulse::get_metadata();
+
+        // Transfer fee to treasury
+        if (platform_fee > 0) {
+            let fee_fa = primary_fungible_store::withdraw(account, pulse_metadata, platform_fee);
+            primary_fungible_store::deposit(registry.platform_treasury, fee_fa);
+            registry.total_fees_collected = registry.total_fees_collected + platform_fee;
+        };
+
+        // Transfer net amount to FA vault
+        let fa_vault = borrow_global<FARewardVault>(registry_addr);
+        let payment = primary_fungible_store::withdraw(account, pulse_metadata, net_amount);
+        fungible_asset::deposit(fa_vault.pulse_store, payment);
 
         poll.reward_pool = poll.reward_pool + net_amount;
     }
@@ -381,9 +516,8 @@ module contracts::poll {
         });
     }
 
-    /// Claim reward (for Manual Pull distribution mode)
-    /// Only voters can claim, and only once
-    public entry fun claim_reward<CoinType>(
+    /// Claim MOVE reward (for Manual Pull distribution mode)
+    public entry fun claim_reward_move(
         account: &signer,
         registry_addr: address,
         poll_id: u64,
@@ -394,6 +528,7 @@ module contracts::poll {
         assert!(poll_id < vector::length(&registry.polls), E_POLL_NOT_FOUND);
 
         let poll = vector::borrow_mut(&mut registry.polls, poll_id);
+        assert!(poll.coin_type_id == COIN_TYPE_APTOS, E_COIN_TYPE_MISMATCH);
 
         // Must be in claiming status
         assert!(poll.status == STATUS_CLAIMING, E_POLL_NOT_CLAIMABLE);
@@ -423,7 +558,6 @@ module contracts::poll {
         // Calculate reward amount
         let voter_count = vector::length(&poll.voters);
         let reward_amount = if (voter_count > 0 && poll.reward_pool > 0) {
-            // Either reward_per_vote or equal split of remaining pool
             if (poll.reward_per_vote > 0) {
                 poll.reward_per_vote
             } else {
@@ -433,20 +567,15 @@ module contracts::poll {
             0
         };
 
-        // Ensure sufficient funds in pool
         assert!(reward_amount <= poll.reward_pool, E_INSUFFICIENT_FUNDS);
 
         if (reward_amount > 0) {
-            // Transfer reward from vault to claimer
-            let vault = borrow_global_mut<RewardVault<CoinType>>(registry_addr);
+            let vault = borrow_global_mut<RewardVault<AptosCoin>>(registry_addr);
             let reward_coins = coin::extract(&mut vault.coins, reward_amount);
             coin::deposit(claimer, reward_coins);
-
-            // Update pool balance
             poll.reward_pool = poll.reward_pool - reward_amount;
         };
 
-        // Mark as claimed
         vector::push_back(&mut poll.claimed, claimer);
 
         event::emit(RewardClaimed {
@@ -456,9 +585,77 @@ module contracts::poll {
         });
     }
 
-    /// Distribute rewards to all voters (for Manual Push distribution mode)
-    /// Only creator can call this
-    public entry fun distribute_rewards<CoinType>(
+    /// Claim PULSE reward (for Manual Pull distribution mode)
+    public entry fun claim_reward_pulse(
+        account: &signer,
+        registry_addr: address,
+        poll_id: u64,
+    ) acquires PollRegistry, FARewardVault {
+        let claimer = signer::address_of(account);
+        let registry = borrow_global_mut<PollRegistry>(registry_addr);
+
+        assert!(poll_id < vector::length(&registry.polls), E_POLL_NOT_FOUND);
+
+        let poll = vector::borrow_mut(&mut registry.polls, poll_id);
+        assert!(poll.coin_type_id == COIN_TYPE_PULSE, E_COIN_TYPE_MISMATCH);
+
+        // Must be in claiming status
+        assert!(poll.status == STATUS_CLAIMING, E_POLL_NOT_CLAIMABLE);
+        assert!(poll.distribution_mode == DISTRIBUTION_MANUAL_PULL, E_INVALID_DISTRIBUTION_MODE);
+
+        // Check claimer is a voter
+        let is_voter = false;
+        let i = 0;
+        let len = vector::length(&poll.voters);
+        while (i < len) {
+            if (*vector::borrow(&poll.voters, i) == claimer) {
+                is_voter = true;
+                break
+            };
+            i = i + 1;
+        };
+        assert!(is_voter, E_NOT_VOTER);
+
+        // Check not already claimed
+        let j = 0;
+        let claimed_len = vector::length(&poll.claimed);
+        while (j < claimed_len) {
+            assert!(*vector::borrow(&poll.claimed, j) != claimer, E_ALREADY_CLAIMED);
+            j = j + 1;
+        };
+
+        // Calculate reward amount
+        let voter_count = vector::length(&poll.voters);
+        let reward_amount = if (voter_count > 0 && poll.reward_pool > 0) {
+            if (poll.reward_per_vote > 0) {
+                poll.reward_per_vote
+            } else {
+                poll.reward_pool / (voter_count as u64)
+            }
+        } else {
+            0
+        };
+
+        assert!(reward_amount <= poll.reward_pool, E_INSUFFICIENT_FUNDS);
+
+        if (reward_amount > 0) {
+            let fa_vault = borrow_global<FARewardVault>(registry_addr);
+            let reward_fa = fungible_asset::withdraw(account, fa_vault.pulse_store, reward_amount);
+            primary_fungible_store::deposit(claimer, reward_fa);
+            poll.reward_pool = poll.reward_pool - reward_amount;
+        };
+
+        vector::push_back(&mut poll.claimed, claimer);
+
+        event::emit(RewardClaimed {
+            poll_id,
+            claimer,
+            amount: reward_amount,
+        });
+    }
+
+    /// Distribute MOVE rewards to all voters (for Manual Push distribution mode)
+    public entry fun distribute_rewards_move(
         account: &signer,
         registry_addr: address,
         poll_id: u64,
@@ -471,6 +668,7 @@ module contracts::poll {
         let poll = vector::borrow_mut(&mut registry.polls, poll_id);
 
         assert!(poll.creator == caller, E_NOT_OWNER);
+        assert!(poll.coin_type_id == COIN_TYPE_APTOS, E_COIN_TYPE_MISMATCH);
         assert!(poll.status == STATUS_CLOSED, E_POLL_NOT_CLAIMABLE);
         assert!(poll.distribution_mode == DISTRIBUTION_MANUAL_PUSH, E_INVALID_DISTRIBUTION_MODE);
         assert!(!poll.rewards_distributed, E_REWARDS_ALREADY_DISTRIBUTED);
@@ -485,7 +683,7 @@ module contracts::poll {
                 poll.reward_pool / (voter_count as u64)
             };
 
-            let vault = borrow_global_mut<RewardVault<CoinType>>(registry_addr);
+            let vault = borrow_global_mut<RewardVault<AptosCoin>>(registry_addr);
 
             let i = 0;
             while (i < voter_count) {
@@ -516,8 +714,69 @@ module contracts::poll {
         });
     }
 
-    /// Withdraw remaining funds from a poll (only creator, only after distribution)
-    public entry fun withdraw_remaining<CoinType>(
+    /// Distribute PULSE rewards to all voters (for Manual Push distribution mode)
+    public entry fun distribute_rewards_pulse(
+        account: &signer,
+        registry_addr: address,
+        poll_id: u64,
+    ) acquires PollRegistry, FARewardVault {
+        let caller = signer::address_of(account);
+        let registry = borrow_global_mut<PollRegistry>(registry_addr);
+
+        assert!(poll_id < vector::length(&registry.polls), E_POLL_NOT_FOUND);
+
+        let poll = vector::borrow_mut(&mut registry.polls, poll_id);
+
+        assert!(poll.creator == caller, E_NOT_OWNER);
+        assert!(poll.coin_type_id == COIN_TYPE_PULSE, E_COIN_TYPE_MISMATCH);
+        assert!(poll.status == STATUS_CLOSED, E_POLL_NOT_CLAIMABLE);
+        assert!(poll.distribution_mode == DISTRIBUTION_MANUAL_PUSH, E_INVALID_DISTRIBUTION_MODE);
+        assert!(!poll.rewards_distributed, E_REWARDS_ALREADY_DISTRIBUTED);
+
+        let voter_count = vector::length(&poll.voters);
+        let total_distributed = 0u64;
+
+        if (voter_count > 0 && poll.reward_pool > 0) {
+            let reward_per_voter = if (poll.reward_per_vote > 0) {
+                poll.reward_per_vote
+            } else {
+                poll.reward_pool / (voter_count as u64)
+            };
+
+            let fa_vault = borrow_global<FARewardVault>(registry_addr);
+
+            let i = 0;
+            while (i < voter_count) {
+                let voter = *vector::borrow(&poll.voters, i);
+                let actual_reward = if (reward_per_voter <= poll.reward_pool) {
+                    reward_per_voter
+                } else {
+                    poll.reward_pool
+                };
+
+                let vault_balance = fungible_asset::balance(fa_vault.pulse_store);
+                if (actual_reward > 0 && actual_reward <= vault_balance) {
+                    let reward_fa = fungible_asset::withdraw(account, fa_vault.pulse_store, actual_reward);
+                    primary_fungible_store::deposit(voter, reward_fa);
+                    poll.reward_pool = poll.reward_pool - actual_reward;
+                    total_distributed = total_distributed + actual_reward;
+                };
+
+                i = i + 1;
+            };
+        };
+
+        poll.rewards_distributed = true;
+
+        event::emit(RewardsDistributed {
+            poll_id,
+            total_distributed,
+            recipient_count: voter_count,
+        });
+    }
+
+    /// Withdraw remaining MOVE funds from a poll (only creator, only after distribution)
+    public entry fun withdraw_remaining_move(
         account: &signer,
         registry_addr: address,
         poll_id: u64,
@@ -529,13 +788,39 @@ module contracts::poll {
 
         let poll = vector::borrow_mut(&mut registry.polls, poll_id);
         assert!(poll.creator == caller, E_NOT_OWNER);
+        assert!(poll.coin_type_id == COIN_TYPE_APTOS, E_COIN_TYPE_MISMATCH);
         assert!(poll.status != STATUS_ACTIVE, E_POLL_NOT_ENDED);
 
         let remaining = poll.reward_pool;
         if (remaining > 0) {
-            let vault = borrow_global_mut<RewardVault<CoinType>>(registry_addr);
+            let vault = borrow_global_mut<RewardVault<AptosCoin>>(registry_addr);
             let coins = coin::extract(&mut vault.coins, remaining);
             coin::deposit(caller, coins);
+            poll.reward_pool = 0;
+        };
+    }
+
+    /// Withdraw remaining PULSE funds from a poll (only creator, only after distribution)
+    public entry fun withdraw_remaining_pulse(
+        account: &signer,
+        registry_addr: address,
+        poll_id: u64,
+    ) acquires PollRegistry, FARewardVault {
+        let caller = signer::address_of(account);
+        let registry = borrow_global_mut<PollRegistry>(registry_addr);
+
+        assert!(poll_id < vector::length(&registry.polls), E_POLL_NOT_FOUND);
+
+        let poll = vector::borrow_mut(&mut registry.polls, poll_id);
+        assert!(poll.creator == caller, E_NOT_OWNER);
+        assert!(poll.coin_type_id == COIN_TYPE_PULSE, E_COIN_TYPE_MISMATCH);
+        assert!(poll.status != STATUS_ACTIVE, E_POLL_NOT_ENDED);
+
+        let remaining = poll.reward_pool;
+        if (remaining > 0) {
+            let fa_vault = borrow_global<FARewardVault>(registry_addr);
+            let fa = fungible_asset::withdraw(account, fa_vault.pulse_store, remaining);
+            primary_fungible_store::deposit(caller, fa);
             poll.reward_pool = 0;
         };
     }

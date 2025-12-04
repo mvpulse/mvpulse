@@ -1,6 +1,7 @@
 /**
  * Hook for PULSE/USDC swap functionality
  * Provides AMM pool interactions including swaps and liquidity management
+ * Updated for dual Fungible Asset (FA) support
  */
 
 import { useState, useCallback, useMemo } from "react";
@@ -9,7 +10,7 @@ import { useNetwork } from "@/contexts/NetworkContext";
 import { createAptosClient } from "@/lib/contract";
 import { usePrivyWallet } from "@/hooks/usePrivyWallet";
 import { submitPrivyTransaction } from "@/lib/privy-transactions";
-import { getCoinTypeArg, getSwapContractAddress, COIN_TYPES, getCoinDecimals } from "@/lib/tokens";
+import { getSwapContractAddress, COIN_TYPES, getCoinDecimals, getUsdcContractAddress } from "@/lib/tokens";
 import { formatBalance } from "@/lib/balance";
 
 // Swap module name
@@ -64,12 +65,10 @@ export function useSwap() {
 
   const client = useMemo(() => createAptosClient(config), [config]);
   const swapAddress = getSwapContractAddress(network);
+  const usdcMetadataAddress = getUsdcContractAddress(network);
 
   // Get the active wallet address (Privy or native)
   const activeAddress = isPrivyWallet ? privyAddress : account?.address?.toString();
-
-  // USDC type argument for the pool
-  const usdcTypeArg = getCoinTypeArg(COIN_TYPES.USDC, network);
 
   // Build function ID for swap contract
   const getSwapFunctionId = useCallback(
@@ -80,12 +79,11 @@ export function useSwap() {
   );
 
   // Helper function to execute transaction with dual-path support
+  // Note: FA-based swap contract no longer uses type arguments
   const executeTransaction = useCallback(
     async (
       functionName: string,
-      functionArguments: (string | number | boolean)[],
-      errorMessage: string,
-      typeArguments: string[] = []
+      functionArguments: (string | number | boolean)[]
     ): Promise<TransactionResult> => {
       if (isPrivyWallet) {
         if (!privyAddress || !privyPublicKey || !signRawHash) {
@@ -99,7 +97,7 @@ export function useSwap() {
           signRawHash,
           {
             function: getSwapFunctionId(functionName),
-            typeArguments,
+            typeArguments: [], // FA-based swap has no type args
             functionArguments,
           }
         );
@@ -113,7 +111,7 @@ export function useSwap() {
         const response = await signAndSubmitTransaction({
           data: {
             function: getSwapFunctionId(functionName),
-            typeArguments,
+            typeArguments: [], // FA-based swap has no type args
             functionArguments,
           },
         });
@@ -126,13 +124,13 @@ export function useSwap() {
 
   // Get pool information (view function)
   const getPoolInfo = useCallback(async (): Promise<PoolInfo | null> => {
-    if (!swapAddress || !usdcTypeArg) return null;
+    if (!swapAddress) return null;
 
     try {
       const result = await client.view({
         payload: {
           function: getSwapFunctionId("get_pool_info"),
-          typeArguments: [usdcTypeArg],
+          typeArguments: [],
           functionArguments: [],
         },
       });
@@ -157,26 +155,26 @@ export function useSwap() {
       console.error("Failed to get pool info:", err);
       return null;
     }
-  }, [client, swapAddress, usdcTypeArg, getSwapFunctionId]);
+  }, [client, swapAddress, getSwapFunctionId]);
 
   // Get swap quote (view function)
   const getSwapQuote = useCallback(
     async (amountIn: number, isPulseToUsdc: boolean): Promise<SwapQuote | null> => {
-      if (!swapAddress || !usdcTypeArg || amountIn <= 0) return null;
+      if (!swapAddress || amountIn <= 0) return null;
 
       try {
         const [amountOutResult, priceImpactResult] = await Promise.all([
           client.view({
             payload: {
               function: getSwapFunctionId("get_amount_out"),
-              typeArguments: [usdcTypeArg],
+              typeArguments: [],
               functionArguments: [amountIn.toString(), isPulseToUsdc],
             },
           }),
           client.view({
             payload: {
               function: getSwapFunctionId("get_price_impact"),
-              typeArguments: [usdcTypeArg],
+              typeArguments: [],
               functionArguments: [amountIn.toString(), isPulseToUsdc],
             },
           }),
@@ -210,21 +208,21 @@ export function useSwap() {
         return null;
       }
     },
-    [client, swapAddress, usdcTypeArg, getSwapFunctionId]
+    [client, swapAddress, getSwapFunctionId]
   );
 
   // Get LP position for an address (view function)
   const getLpPosition = useCallback(
     async (address?: string): Promise<LiquidityPosition | null> => {
       const targetAddress = address || activeAddress;
-      if (!swapAddress || !usdcTypeArg || !targetAddress) return null;
+      if (!swapAddress || !targetAddress) return null;
 
       try {
         const [lpResult, poolInfo] = await Promise.all([
           client.view({
             payload: {
               function: getSwapFunctionId("get_lp_position"),
-              typeArguments: [usdcTypeArg],
+              typeArguments: [],
               functionArguments: [targetAddress],
             },
           }),
@@ -261,19 +259,19 @@ export function useSwap() {
         return null;
       }
     },
-    [client, swapAddress, usdcTypeArg, activeAddress, getSwapFunctionId, getPoolInfo]
+    [client, swapAddress, activeAddress, getSwapFunctionId, getPoolInfo]
   );
 
   // Get spot price (view function)
   const getSpotPrice = useCallback(
     async (isPulsePerUsdc: boolean = true): Promise<number | null> => {
-      if (!swapAddress || !usdcTypeArg) return null;
+      if (!swapAddress) return null;
 
       try {
         const result = await client.view({
           payload: {
             function: getSwapFunctionId("get_spot_price"),
-            typeArguments: [usdcTypeArg],
+            typeArguments: [],
             functionArguments: [isPulsePerUsdc],
           },
         });
@@ -288,25 +286,23 @@ export function useSwap() {
         return null;
       }
     },
-    [client, swapAddress, usdcTypeArg, getSwapFunctionId]
+    [client, swapAddress, getSwapFunctionId]
   );
 
-  // Swap PULSE to USDC
+  // Swap PULSE to USDC (FA-based)
   const swapPulseToUsdc = useCallback(
     async (pulseAmount: number, minUsdcOut: number): Promise<TransactionResult> => {
       setLoading(true);
       setError(null);
 
       try {
-        if (!usdcTypeArg) {
+        if (!usdcMetadataAddress) {
           throw new Error("USDC not configured for this network");
         }
 
         return await executeTransaction(
           "swap_pulse_to_stable",
-          [pulseAmount.toString(), minUsdcOut.toString()],
-          "Failed to swap PULSE to USDC",
-          [usdcTypeArg]
+          [pulseAmount.toString(), minUsdcOut.toString()]
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to swap";
@@ -316,25 +312,23 @@ export function useSwap() {
         setLoading(false);
       }
     },
-    [executeTransaction, usdcTypeArg]
+    [executeTransaction, usdcMetadataAddress]
   );
 
-  // Swap USDC to PULSE
+  // Swap USDC to PULSE (FA-based)
   const swapUsdcToPulse = useCallback(
     async (usdcAmount: number, minPulseOut: number): Promise<TransactionResult> => {
       setLoading(true);
       setError(null);
 
       try {
-        if (!usdcTypeArg) {
+        if (!usdcMetadataAddress) {
           throw new Error("USDC not configured for this network");
         }
 
         return await executeTransaction(
           "swap_stable_to_pulse",
-          [usdcAmount.toString(), minPulseOut.toString()],
-          "Failed to swap USDC to PULSE",
-          [usdcTypeArg]
+          [usdcAmount.toString(), minPulseOut.toString()]
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to swap";
@@ -344,25 +338,23 @@ export function useSwap() {
         setLoading(false);
       }
     },
-    [executeTransaction, usdcTypeArg]
+    [executeTransaction, usdcMetadataAddress]
   );
 
-  // Add liquidity to the pool
+  // Add liquidity to the pool (FA-based)
   const addLiquidity = useCallback(
     async (pulseAmount: number, usdcAmount: number, minLpShares: number): Promise<TransactionResult> => {
       setLoading(true);
       setError(null);
 
       try {
-        if (!usdcTypeArg) {
+        if (!usdcMetadataAddress) {
           throw new Error("USDC not configured for this network");
         }
 
         return await executeTransaction(
           "add_liquidity",
-          [pulseAmount.toString(), usdcAmount.toString(), minLpShares.toString()],
-          "Failed to add liquidity",
-          [usdcTypeArg]
+          [pulseAmount.toString(), usdcAmount.toString(), minLpShares.toString()]
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to add liquidity";
@@ -372,25 +364,23 @@ export function useSwap() {
         setLoading(false);
       }
     },
-    [executeTransaction, usdcTypeArg]
+    [executeTransaction, usdcMetadataAddress]
   );
 
-  // Remove liquidity from the pool
+  // Remove liquidity from the pool (FA-based)
   const removeLiquidity = useCallback(
     async (lpShares: number, minPulseOut: number, minUsdcOut: number): Promise<TransactionResult> => {
       setLoading(true);
       setError(null);
 
       try {
-        if (!usdcTypeArg) {
+        if (!usdcMetadataAddress) {
           throw new Error("USDC not configured for this network");
         }
 
         return await executeTransaction(
           "remove_liquidity",
-          [lpShares.toString(), minPulseOut.toString(), minUsdcOut.toString()],
-          "Failed to remove liquidity",
-          [usdcTypeArg]
+          [lpShares.toString(), minPulseOut.toString(), minUsdcOut.toString()]
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to remove liquidity";
@@ -400,7 +390,7 @@ export function useSwap() {
         setLoading(false);
       }
     },
-    [executeTransaction, usdcTypeArg]
+    [executeTransaction, usdcMetadataAddress]
   );
 
   return {
@@ -409,6 +399,7 @@ export function useSwap() {
     error,
     swapAddress,
     activeAddress,
+    usdcMetadataAddress, // Expose for initialization
 
     // Read functions
     getPoolInfo,

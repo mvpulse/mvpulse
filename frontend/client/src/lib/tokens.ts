@@ -1,6 +1,6 @@
 /**
  * Token configuration for MVPulse
- * Supports multiple coin types (MOVE, PULSE, USDC)
+ * Supports multiple coin types (MOVE as legacy coin, PULSE and USDC as Fungible Assets)
  */
 
 export const COIN_TYPES = {
@@ -10,6 +10,9 @@ export const COIN_TYPES = {
 } as const;
 
 export type CoinTypeId = (typeof COIN_TYPES)[keyof typeof COIN_TYPES];
+
+// Token standard types
+export type TokenStandard = "legacy_coin" | "fungible_asset";
 
 // Network-specific contract addresses
 const PULSE_ADDRESSES: Record<"testnet" | "mainnet", string> = {
@@ -28,7 +31,56 @@ const SWAP_ADDRESSES: Record<"testnet" | "mainnet", string> = {
 };
 
 /**
+ * Check if a token uses the Fungible Asset standard
+ * MOVE uses legacy coin, PULSE and USDC use Fungible Asset
+ */
+export function getTokenStandard(coinTypeId: CoinTypeId): TokenStandard {
+  switch (coinTypeId) {
+    case COIN_TYPES.MOVE:
+      return "legacy_coin";
+    case COIN_TYPES.PULSE:
+    case COIN_TYPES.USDC:
+      return "fungible_asset";
+    default:
+      return "legacy_coin";
+  }
+}
+
+/**
+ * Get the FA metadata address for a Fungible Asset token
+ * For PULSE: Returns the deterministic address based on the named object seed
+ * For USDC: Returns the contract address (USDC.e FA metadata is at its contract address)
+ */
+export function getFAMetadataAddress(
+  coinTypeId: CoinTypeId,
+  network: "testnet" | "mainnet"
+): string {
+  switch (coinTypeId) {
+    case COIN_TYPES.PULSE: {
+      // PULSE FA metadata address is derived from the contract address and seed "PULSE_TOKEN"
+      // The address is deterministic: sha3_256(contract_address + 0xFE + "PULSE_TOKEN")
+      // For now, we'll use the view function approach to get the actual address
+      // The metadata address will be queried via `pulse::get_metadata_address` view function
+      const pulseAddress = PULSE_ADDRESSES[network];
+      if (!pulseAddress) {
+        return "";
+      }
+      // Return the contract address - we'll use view function to get actual metadata
+      return pulseAddress;
+    }
+    case COIN_TYPES.USDC: {
+      // USDC.e FA metadata is at the contract address itself
+      const usdcAddress = USDC_ADDRESSES[network];
+      return usdcAddress || "";
+    }
+    default:
+      return "";
+  }
+}
+
+/**
  * Get the full type argument string for a coin type
+ * Only applicable for legacy coins (MOVE)
  * @param coinTypeId - The coin type identifier (0 = MOVE, 1 = PULSE, 2 = USDC)
  * @param network - The network (testnet or mainnet)
  * @returns The full type argument string for Move transactions
@@ -41,12 +93,13 @@ export function getCoinTypeArg(
     case COIN_TYPES.MOVE:
       return "0x1::aptos_coin::AptosCoin";
     case COIN_TYPES.PULSE: {
+      // PULSE is now FA, but we still need this for some APIs
       const pulseAddress = PULSE_ADDRESSES[network];
       if (!pulseAddress) {
         console.warn(`PULSE contract address not configured for ${network}`);
         return "";
       }
-      return `${pulseAddress}::pulse::PULSE`;
+      return pulseAddress; // Return just the address for FA
     }
     case COIN_TYPES.USDC: {
       const usdcAddress = USDC_ADDRESSES[network];
@@ -54,11 +107,25 @@ export function getCoinTypeArg(
         console.warn(`USDC contract address not configured for ${network}`);
         return "";
       }
-      return `${usdcAddress}::usdc::USDC`;
+      return usdcAddress; // Return just the address for FA
     }
     default:
       return "";
   }
+}
+
+/**
+ * Get the PULSE contract address for a network
+ */
+export function getPulseContractAddress(network: "testnet" | "mainnet"): string {
+  return PULSE_ADDRESSES[network];
+}
+
+/**
+ * Get the USDC contract address for a network
+ */
+export function getUsdcContractAddress(network: "testnet" | "mainnet"): string {
+  return USDC_ADDRESSES[network];
 }
 
 /**
@@ -120,6 +187,7 @@ export const COIN_METADATA: Record<
     name: string;
     decimals: number;
     description: string;
+    standard: TokenStandard;
   }
 > = {
   [COIN_TYPES.MOVE]: {
@@ -128,6 +196,7 @@ export const COIN_METADATA: Record<
     name: "Move Token",
     decimals: 8,
     description: "Native token of Movement Network",
+    standard: "legacy_coin",
   },
   [COIN_TYPES.PULSE]: {
     id: COIN_TYPES.PULSE,
@@ -135,6 +204,7 @@ export const COIN_METADATA: Record<
     name: "Pulse Token",
     decimals: 8,
     description: "MVPulse governance and rewards token",
+    standard: "fungible_asset",
   },
   [COIN_TYPES.USDC]: {
     id: COIN_TYPES.USDC,
@@ -142,6 +212,7 @@ export const COIN_METADATA: Record<
     name: "USD Coin",
     decimals: 6,
     description: "USD-pegged stablecoin",
+    standard: "fungible_asset",
   },
 };
 
@@ -165,6 +236,7 @@ export function isValidCoinType(coinTypeId: number): coinTypeId is CoinTypeId {
 
 /**
  * Get the resource type for balance queries
+ * Only for legacy coins (MOVE)
  * @param coinTypeId - The coin type identifier
  * @param network - The network (testnet or mainnet)
  * @returns The CoinStore resource type for API queries
@@ -173,6 +245,10 @@ export function getCoinStoreType(
   coinTypeId: CoinTypeId,
   network: "testnet" | "mainnet"
 ): string {
+  if (getTokenStandard(coinTypeId) !== "legacy_coin") {
+    console.warn(`getCoinStoreType called for FA token ${getCoinSymbol(coinTypeId)}`);
+    return "";
+  }
   const coinTypeArg = getCoinTypeArg(coinTypeId, network);
   return `0x1::coin::CoinStore<${coinTypeArg}>`;
 }
