@@ -60,6 +60,7 @@ export default function WalletPage() {
   const [transferAmount, setTransferAmount] = useState("");
   const [recipientAddress, setRecipientAddress] = useState("");
   const [isTransferring, setIsTransferring] = useState(false);
+  const [isClaimingPulse, setIsClaimingPulse] = useState(false);
 
   const isTestnet = network === "testnet";
   const client = createAptosClient(config);
@@ -115,6 +116,50 @@ export default function WalletPage() {
     await fundWallet();
     // Refresh balance after funding
     setTimeout(fetchBalance, 2000);
+  };
+
+  // Handle PULSE faucet
+  const handlePulseFaucet = async () => {
+    if (!address) return;
+
+    setIsClaimingPulse(true);
+    try {
+      const pulseContract = getPulseContractAddress(network);
+      const payload = {
+        function: `${pulseContract}::pulse::faucet` as `${string}::${string}::${string}`,
+        typeArguments: [] as [],
+        functionArguments: [],
+      };
+
+      let hash: string;
+      if (isPrivyWallet) {
+        if (!privyAddress || !privyPublicKey || !signRawHash) {
+          throw new Error("Privy wallet not properly connected");
+        }
+        hash = await submitPrivyTransaction(client, privyAddress, privyPublicKey, signRawHash, payload);
+      } else {
+        const response = await signAndSubmitTransaction({ data: payload });
+        hash = response.hash;
+      }
+
+      toast.success("PULSE claimed successfully!", {
+        description: "You received 1,000 PULSE from the faucet",
+        action: {
+          label: "View",
+          onClick: () => window.open(`${config.explorerUrl}/txn/${hash}?network=${network}`, "_blank"),
+        },
+      });
+
+      // Refresh balance after claiming
+      setTimeout(fetchBalance, 2000);
+    } catch (error) {
+      console.error("PULSE faucet failed:", error);
+      toast.error("Failed to claim PULSE", {
+        description: error instanceof Error ? error.message : "Unknown error",
+      });
+    } finally {
+      setIsClaimingPulse(false);
+    }
   };
 
   // Get selected token balance
@@ -495,6 +540,27 @@ export default function WalletPage() {
                   Participate in Polls
                 </Button>
               </Link>
+              {/* Get PULSE - Testnet only */}
+              {isTestnet && (
+                <Button
+                  variant="outline"
+                  className="w-full justify-start border-purple-500/50 text-purple-600 hover:bg-purple-500/10"
+                  onClick={handlePulseFaucet}
+                  disabled={isClaimingPulse}
+                >
+                  {isClaimingPulse ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Claiming...
+                    </>
+                  ) : (
+                    <>
+                      <Droplets className="w-4 h-4 mr-2" />
+                      Get PULSE (Faucet)
+                    </>
+                  )}
+                </Button>
+              )}
               {/* Get MOVE - Testnet only for Privy wallets */}
               {isPrivyWallet && isTestnet && (
                 <Button
