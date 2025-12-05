@@ -73,7 +73,7 @@ export default function WalletPage() {
 
     setIsLoadingBalance(true);
     try {
-      const balanceData = await getAllBalances(address, config.rpcUrl, network);
+      const balanceData = await getAllBalances(address, config.rpcUrl, network, config.fullnodeUrl);
       setBalances(balanceData);
       setLastUpdated(new Date());
     } catch (error) {
@@ -81,7 +81,7 @@ export default function WalletPage() {
     } finally {
       setIsLoadingBalance(false);
     }
-  }, [address, config.rpcUrl, network]);
+  }, [address, config.rpcUrl, config.fullnodeUrl, network]);
 
   // Fetch balances on mount and when address changes
   useEffect(() => {

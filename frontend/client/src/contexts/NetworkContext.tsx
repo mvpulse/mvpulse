@@ -5,7 +5,8 @@ export type NetworkType = "testnet" | "mainnet";
 interface NetworkConfig {
   name: string;
   contractAddress: string;
-  rpcUrl: string;
+  rpcUrl: string; // Proxy URL for regular fetch requests
+  fullnodeUrl: string; // Actual RPC URL for Aptos SDK
   chainId: number;
   explorerUrl: string;
 }
@@ -20,14 +21,16 @@ const NETWORK_CONFIGS: Record<NetworkType, NetworkConfig> = {
   testnet: {
     name: "Testnet",
     contractAddress: import.meta.env.VITE_TESTNET_CONTRACT_ADDRESS || "",
-    rpcUrl: import.meta.env.VITE_TESTNET_RPC_URL || "https://aptos.testnet.porto.movementlabs.xyz/v1",
-    chainId: Number(import.meta.env.VITE_TESTNET_CHAIN_ID) || 177,
+    rpcUrl: import.meta.env.VITE_TESTNET_RPC_URL || "https://testnet.movementnetwork.xyz/v1",
+    fullnodeUrl: "https://testnet.movementnetwork.xyz/v1",
+    chainId: Number(import.meta.env.VITE_TESTNET_CHAIN_ID) || 250,
     explorerUrl: "https://explorer.movementnetwork.xyz",
   },
   mainnet: {
     name: "Mainnet",
     contractAddress: import.meta.env.VITE_MAINNET_CONTRACT_ADDRESS || "",
-    rpcUrl: import.meta.env.VITE_MAINNET_RPC_URL || "https://mainnet.movementnetwork.xyz/v1",
+    rpcUrl: import.meta.env.VITE_MAINNET_RPC_URL || "https://full.mainnet.movementinfra.xyz/v1",
+    fullnodeUrl: "https://full.mainnet.movementinfra.xyz/v1",
     chainId: Number(import.meta.env.VITE_MAINNET_CHAIN_ID) || 126,
     explorerUrl: "https://explorer.movementnetwork.xyz",
   },

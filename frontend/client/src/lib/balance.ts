@@ -3,6 +3,7 @@
  * Supports legacy coins (MOVE) and Fungible Assets (PULSE, USDC)
  */
 
+import { Aptos, AptosConfig, Network } from "@aptos-labs/ts-sdk";
 import {
   CoinTypeId,
   COIN_TYPES,
@@ -13,6 +14,15 @@ import {
   getPulseContractAddress,
   getUsdcContractAddress,
 } from "./tokens";
+
+// Create an Aptos client for balance fetching
+function createBalanceClient(fullnodeUrl: string): Aptos {
+  const config = new AptosConfig({
+    network: Network.CUSTOM,
+    fullnode: fullnodeUrl,
+  });
+  return new Aptos(config);
+}
 
 export interface AccountBalance {
   balance: number; // In smallest unit (octas for MOVE/PULSE, micro for USDC)
@@ -90,21 +100,21 @@ async function getLegacyCoinBalance(
 
 /**
  * Fetch the balance for a Fungible Asset (e.g., PULSE, USDC)
- * Uses the view function API to query primary_fungible_store::balance
+ * Uses the contract's view functions directly
  */
 async function getFABalance(
   address: string,
-  rpcUrl: string,
+  fullnodeUrl: string,
   coinTypeId: CoinTypeId,
   network: "testnet" | "mainnet"
 ): Promise<AccountBalance> {
   const symbol = getCoinSymbol(coinTypeId);
 
   try {
-    let metadataAddress: string;
+    const client = createBalanceClient(fullnodeUrl);
 
     if (coinTypeId === COIN_TYPES.PULSE) {
-      // For PULSE, we need to get the FA metadata address from the contract
+      // Use PULSE contract's balance view function directly
       const pulseContract = getPulseContractAddress(network);
       if (!pulseContract) {
         return {
@@ -115,19 +125,25 @@ async function getFABalance(
         };
       }
 
-      // First, get the PULSE metadata address using view function
-      const metadataResponse = await fetch(`${rpcUrl}/view`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          function: `${pulseContract}::pulse::get_metadata_address`,
-          type_arguments: [],
-          arguments: [],
-        }),
-      });
+      try {
+        const balanceResult = await client.view({
+          payload: {
+            function: `${pulseContract}::pulse::balance`,
+            typeArguments: [],
+            functionArguments: [address],
+          },
+        });
+        const balance = Number(balanceResult[0]);
+        const decimals = getCoinDecimals(coinTypeId);
 
-      if (!metadataResponse.ok) {
-        // PULSE might not be initialized yet
+        return {
+          balance,
+          balanceFormatted: formatBalance(balance, decimals),
+          exists: true,
+          symbol,
+        };
+      } catch (error) {
+        console.error("Error fetching PULSE balance:", error);
         return {
           balance: 0,
           balanceFormatted: "0.0000",
@@ -135,13 +151,10 @@ async function getFABalance(
           symbol,
         };
       }
-
-      const metadataResult = await metadataResponse.json();
-      metadataAddress = metadataResult[0];
     } else if (coinTypeId === COIN_TYPES.USDC) {
-      // USDC.e FA metadata is at the contract address directly
-      metadataAddress = getUsdcContractAddress(network);
-      if (!metadataAddress) {
+      // USDC.e - use primary_fungible_store::balance with the USDC metadata address
+      const usdcAddress = getUsdcContractAddress(network);
+      if (!usdcAddress) {
         return {
           balance: 0,
           balanceFormatted: "0.0000",
@@ -149,44 +162,39 @@ async function getFABalance(
           symbol,
         };
       }
-    } else {
-      return {
-        balance: 0,
-        balanceFormatted: "0.0000",
-        exists: false,
-        symbol,
-      };
+
+      try {
+        const balanceResult = await client.view({
+          payload: {
+            function: "0x1::primary_fungible_store::balance",
+            typeArguments: ["0x1::fungible_asset::Metadata"],
+            functionArguments: [address, usdcAddress],
+          },
+        });
+        const balance = Number(balanceResult[0]);
+        const decimals = getCoinDecimals(coinTypeId);
+
+        return {
+          balance,
+          balanceFormatted: formatBalance(balance, decimals),
+          exists: true,
+          symbol,
+        };
+      } catch (error) {
+        console.error("Error fetching USDC balance:", error);
+        return {
+          balance: 0,
+          balanceFormatted: "0.0000",
+          exists: false,
+          symbol,
+        };
+      }
     }
-
-    // Now fetch the balance using primary_fungible_store::balance view function
-    const balanceResponse = await fetch(`${rpcUrl}/view`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        function: "0x1::primary_fungible_store::balance",
-        type_arguments: ["0x1::fungible_asset::Metadata"],
-        arguments: [address, metadataAddress],
-      }),
-    });
-
-    if (!balanceResponse.ok) {
-      // Account might not have a store for this FA yet
-      return {
-        balance: 0,
-        balanceFormatted: "0.0000",
-        exists: false,
-        symbol,
-      };
-    }
-
-    const balanceResult = await balanceResponse.json();
-    const balance = parseInt(balanceResult[0], 10);
-    const decimals = getCoinDecimals(coinTypeId);
 
     return {
-      balance,
-      balanceFormatted: formatBalance(balance, decimals),
-      exists: true,
+      balance: 0,
+      balanceFormatted: "0.0000",
+      exists: false,
       symbol,
     };
   } catch (error) {
@@ -204,20 +212,24 @@ async function getFABalance(
  * Fetch the balance for a specific coin type
  * Automatically handles both legacy coins and Fungible Assets
  * @param address - The account address
- * @param rpcUrl - The RPC endpoint URL
+ * @param rpcUrl - The RPC endpoint URL (proxy URL for legacy coins)
  * @param coinTypeId - The coin type (0 = MOVE, 1 = PULSE, 2 = USDC)
  * @param network - The network (testnet or mainnet)
+ * @param fullnodeUrl - The actual RPC URL for Aptos SDK (required for FA tokens)
  */
 export async function getAccountBalance(
   address: string,
   rpcUrl: string,
   coinTypeId: CoinTypeId = COIN_TYPES.MOVE,
-  network: "testnet" | "mainnet" = "testnet"
+  network: "testnet" | "mainnet" = "testnet",
+  fullnodeUrl?: string
 ): Promise<AccountBalance> {
   const standard = getTokenStandard(coinTypeId);
 
   if (standard === "fungible_asset") {
-    return getFABalance(address, rpcUrl, coinTypeId, network);
+    // FA tokens require the actual fullnode URL for Aptos SDK
+    const url = fullnodeUrl || rpcUrl;
+    return getFABalance(address, url, coinTypeId, network);
   } else {
     return getLegacyCoinBalance(address, rpcUrl, coinTypeId, network);
   }
@@ -226,18 +238,20 @@ export async function getAccountBalance(
 /**
  * Fetch all balances (MOVE, PULSE, USDC) for an account
  * @param address - The account address
- * @param rpcUrl - The RPC endpoint URL
+ * @param rpcUrl - The RPC endpoint URL (proxy URL)
  * @param network - The network (testnet or mainnet)
+ * @param fullnodeUrl - The actual RPC URL for Aptos SDK
  */
 export async function getAllBalances(
   address: string,
   rpcUrl: string,
-  network: "testnet" | "mainnet" = "testnet"
+  network: "testnet" | "mainnet" = "testnet",
+  fullnodeUrl?: string
 ): Promise<AllBalances> {
   const [moveBalance, pulseBalance, usdcBalance] = await Promise.all([
-    getAccountBalance(address, rpcUrl, COIN_TYPES.MOVE, network),
-    getAccountBalance(address, rpcUrl, COIN_TYPES.PULSE, network),
-    getAccountBalance(address, rpcUrl, COIN_TYPES.USDC, network),
+    getAccountBalance(address, rpcUrl, COIN_TYPES.MOVE, network, fullnodeUrl),
+    getAccountBalance(address, rpcUrl, COIN_TYPES.PULSE, network, fullnodeUrl),
+    getAccountBalance(address, rpcUrl, COIN_TYPES.USDC, network, fullnodeUrl),
   ]);
 
   return {

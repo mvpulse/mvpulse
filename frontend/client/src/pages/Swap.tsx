@@ -76,7 +76,7 @@ export default function SwapPage() {
     setIsLoadingData(true);
     try {
       const [balanceData, poolData, lpData, priceData] = await Promise.all([
-        address ? getAllBalances(address, config.rpcUrl, network) : null,
+        address ? getAllBalances(address, config.rpcUrl, network, config.fullnodeUrl) : null,
         getPoolInfo(),
         address ? getLpPosition() : null,
         getSpotPrice(true), // PULSE per USDC
