@@ -21,6 +21,7 @@ import { useContract } from "@/hooks/useContract";
 import { useWalletConnection } from "@/hooks/useWalletConnection";
 import type { PollWithMeta } from "@/types/poll";
 import { POLL_STATUS, DISTRIBUTION_MODE } from "@/types/poll";
+import { COIN_TYPES, getCoinSymbol, type CoinTypeId } from "@/lib/tokens";
 import { toast } from "sonner";
 import { useNetwork } from "@/contexts/NetworkContext";
 
@@ -116,10 +117,10 @@ export default function ParticipantDashboard() {
   }, [votedPolls, claimablePolls, availablePolls]);
 
   // Handle claim reward
-  const handleClaim = async (pollId: number) => {
+  const handleClaim = async (pollId: number, coinTypeId: CoinTypeId) => {
     setClaimingPollId(pollId);
     try {
-      const result = await claimReward(pollId);
+      const result = await claimReward(pollId, coinTypeId);
       toast.success("Reward Claimed!", {
         description: "Your reward has been transferred to your wallet.",
         action: {
@@ -140,7 +141,8 @@ export default function ParticipantDashboard() {
 
   // Render poll card
   const renderPollCard = (poll: PollWithMeta) => {
-    const rewardPoolMove = poll.reward_pool / 1e8;
+    const rewardPool = poll.reward_pool / 1e8;
+    const coinSymbol = getCoinSymbol(poll.coin_type_id as CoinTypeId);
     return (
       <PollCard
         key={poll.id}
@@ -149,7 +151,7 @@ export default function ParticipantDashboard() {
         description={poll.description}
         votes={poll.totalVotes}
         timeLeft={poll.timeRemaining}
-        reward={rewardPoolMove > 0 ? `${rewardPoolMove.toFixed(2)} MOVE` : undefined}
+        reward={rewardPool > 0 ? `${rewardPool.toFixed(2)} ${coinSymbol}` : undefined}
         status={poll.isActive ? "active" : "closed"}
         tags={[]}
       />
@@ -267,6 +269,7 @@ export default function ParticipantDashboard() {
                   : poll.totalVotes > 0
                   ? (poll.reward_pool / 1e8) / poll.totalVotes
                   : 0;
+                const coinSymbol = getCoinSymbol(poll.coin_type_id as CoinTypeId);
                 return (
                   <div
                     key={poll.id}
@@ -279,12 +282,12 @@ export default function ParticipantDashboard() {
                         </p>
                       </Link>
                       <p className="text-sm text-muted-foreground">
-                        ~{perVoter.toFixed(4)} MOVE available
+                        ~{perVoter.toFixed(4)} {coinSymbol} available
                       </p>
                     </div>
                     <Button
                       size="sm"
-                      onClick={() => handleClaim(poll.id)}
+                      onClick={() => handleClaim(poll.id, poll.coin_type_id as CoinTypeId)}
                       disabled={claimingPollId === poll.id}
                       className="bg-green-600 hover:bg-green-700"
                     >

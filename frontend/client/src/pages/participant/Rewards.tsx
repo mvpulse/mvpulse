@@ -18,6 +18,7 @@ import { useWallet } from "@aptos-labs/wallet-adapter-react";
 import { useContract } from "@/hooks/useContract";
 import type { PollWithMeta } from "@/types/poll";
 import { POLL_STATUS, DISTRIBUTION_MODE } from "@/types/poll";
+import { COIN_TYPES, getCoinSymbol, type CoinTypeId } from "@/lib/tokens";
 import { toast } from "sonner";
 import { useNetwork } from "@/contexts/NetworkContext";
 
@@ -112,10 +113,10 @@ export default function Rewards() {
   }, [claimablePolls]);
 
   // Handle claim reward
-  const handleClaim = async (pollId: number) => {
+  const handleClaim = async (pollId: number, coinTypeId: CoinTypeId) => {
     setClaimingPollId(pollId);
     try {
-      const result = await claimReward(pollId);
+      const result = await claimReward(pollId, coinTypeId);
       toast.success("Reward Claimed!", {
         description: "Your reward has been transferred to your wallet.",
         action: {
@@ -137,7 +138,7 @@ export default function Rewards() {
   // Handle claim all
   const handleClaimAll = async () => {
     for (const poll of claimablePolls) {
-      await handleClaim(poll.id);
+      await handleClaim(poll.id, poll.coin_type_id as CoinTypeId);
     }
   };
 
@@ -256,6 +257,7 @@ export default function Rewards() {
                   : poll.totalVotes > 0
                   ? (poll.reward_pool / 1e8) / poll.totalVotes
                   : 0;
+                const coinSymbol = getCoinSymbol(poll.coin_type_id as CoinTypeId);
 
                 return (
                   <div
@@ -269,11 +271,11 @@ export default function Rewards() {
                         </p>
                       </Link>
                       <p className="text-sm text-muted-foreground">
-                        ~{perVoter.toFixed(4)} MOVE available
+                        ~{perVoter.toFixed(4)} {coinSymbol} available
                       </p>
                     </div>
                     <Button
-                      onClick={() => handleClaim(poll.id)}
+                      onClick={() => handleClaim(poll.id, poll.coin_type_id as CoinTypeId)}
                       disabled={claimingPollId === poll.id}
                       className="bg-green-600 hover:bg-green-700"
                     >
@@ -319,6 +321,7 @@ export default function Rewards() {
                   : poll.totalVotes > 0
                   ? (poll.reward_pool / 1e8) / poll.totalVotes
                   : 0;
+                const coinSymbol = getCoinSymbol(poll.coin_type_id as CoinTypeId);
 
                 return (
                   <div
@@ -332,7 +335,7 @@ export default function Rewards() {
                         </p>
                       </Link>
                       <p className="text-sm text-muted-foreground">
-                        ~{perVoter.toFixed(4)} MOVE
+                        ~{perVoter.toFixed(4)} {coinSymbol}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
