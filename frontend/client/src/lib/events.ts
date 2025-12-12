@@ -13,52 +13,74 @@ export interface ActivityEvent {
   optionIndex?: number;
 }
 
-interface UserTransaction {
-  version: string;
-  entry_function_function_name: string | null;
-  timestamp: string;
+// Event data structure from the poll contract
+interface EventData {
+  poll_id?: string;
+  voter?: string;
+  claimer?: string;
+  creator?: string;
+  amount?: string;
+  option_index?: string;
+  title?: string;
+}
+
+interface IndexerEvent {
+  type: string;
+  data: EventData;
+  transaction_version: string;
+  transaction_block_height: number;
+  block_metadata_transaction?: {
+    timestamp: string;
+  };
 }
 
 interface GraphQLResponse {
   data?: {
-    user_transactions: UserTransaction[];
+    events: IndexerEvent[];
   };
   errors?: Array<{ message: string }>;
 }
 
-// GraphQL query for user transactions with the poll contract
+// GraphQL query for events from the poll contract
+// Queries events where the user is the voter, claimer, or creator
+// Also fetches transaction timestamp by joining with block_metadata_transactions
 const ACTIVITY_QUERY = `
-  query GetUserActivity($sender: String!, $contractAddress: String!, $limit: Int!) {
-    user_transactions(
+  query GetUserActivity($eventTypePattern: String!, $userAddress: String!, $limit: Int!) {
+    events(
       where: {
-        sender: { _eq: $sender },
-        entry_function_contract_address: { _eq: $contractAddress },
-        entry_function_module_name: { _eq: "poll" }
+        indexed_type: { _like: $eventTypePattern },
+        _or: [
+          { data: { _contains: { voter: $userAddress } } },
+          { data: { _contains: { claimer: $userAddress } } },
+          { data: { _contains: { creator: $userAddress } } }
+        ]
       },
-      order_by: { timestamp: desc },
+      order_by: { transaction_block_height: desc },
       limit: $limit
     ) {
-      version
-      entry_function_function_name
-      timestamp
+      type
+      data
+      transaction_version
+      transaction_block_height
+      block_metadata_transaction {
+        timestamp
+      }
     }
   }
 `;
 
 /**
- * Map function name to activity type
+ * Map event type to activity type
  */
-function mapFunctionToActivityType(functionName: string | null): ActivityEvent['type'] {
-  switch (functionName) {
-    case 'vote':
-      return 'vote';
-    case 'claim_reward':
-      return 'reward_claimed';
-    case 'create_poll':
-      return 'poll_created';
-    default:
-      return 'vote';
+function mapEventTypeToActivityType(eventType: string): ActivityEvent['type'] {
+  if (eventType.includes('VoteCast')) {
+    return 'vote';
+  } else if (eventType.includes('RewardClaimed')) {
+    return 'reward_claimed';
+  } else if (eventType.includes('PollCreated')) {
+    return 'poll_created';
   }
+  return 'vote';
 }
 
 /**
@@ -75,14 +97,17 @@ export async function fetchUserActivity(
   limit: number = 10
 ): Promise<ActivityEvent[]> {
   try {
+    // Create event type pattern to match poll contract events
+    const eventTypePattern = `${contractAddress}::poll::%`;
+
     const response = await fetch(indexerUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         query: ACTIVITY_QUERY,
         variables: {
-          sender: userAddress,
-          contractAddress: contractAddress,
+          eventTypePattern: eventTypePattern,
+          userAddress: userAddress,
           limit: limit,
         },
       }),
@@ -100,15 +125,31 @@ export async function fetchUserActivity(
       return [];
     }
 
-    if (!result.data?.user_transactions) {
+    if (!result.data?.events) {
       return [];
     }
 
-    return result.data.user_transactions.map((tx): ActivityEvent => ({
-      type: mapFunctionToActivityType(tx.entry_function_function_name),
-      timestamp: new Date(tx.timestamp).getTime(),
-      txHash: tx.version,
-    }));
+    return result.data.events.map((event): ActivityEvent => {
+      const activityType = mapEventTypeToActivityType(event.type);
+      const pollId = event.data.poll_id ? parseInt(event.data.poll_id, 10) : undefined;
+      const amount = event.data.amount ? parseInt(event.data.amount, 10) / 1e8 : undefined;
+      const optionIndex = event.data.option_index ? parseInt(event.data.option_index, 10) : undefined;
+
+      // Get timestamp from block metadata if available, otherwise use current time
+      const timestamp = event.block_metadata_transaction?.timestamp
+        ? new Date(event.block_metadata_transaction.timestamp).getTime()
+        : Date.now();
+
+      return {
+        type: activityType,
+        pollId,
+        pollTitle: event.data.title,
+        amount,
+        timestamp,
+        txHash: event.transaction_version,
+        optionIndex,
+      };
+    });
   } catch (error) {
     console.error("Error fetching user activity from indexer:", error);
     return [];

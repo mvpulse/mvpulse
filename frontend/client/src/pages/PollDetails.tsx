@@ -1,4 +1,4 @@
-import { useParams } from "wouter";
+import { useParams, Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -14,7 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Trophy, Clock, Share2, AlertCircle, Loader2, Wallet, CheckCircle2, Gift, Send, Coins, XCircle, Users, HandCoins, Flame } from "lucide-react";
+import { Trophy, Clock, Share2, AlertCircle, Loader2, Wallet, CheckCircle2, Gift, Send, Coins, XCircle, Users, HandCoins, Flame, ArrowUpRight } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
 import { useContract } from "@/hooks/useContract";
@@ -418,9 +418,16 @@ export default function PollDetails() {
                   )}
                 </div>
                 {!canVoteToday && (
-                  <p className="text-xs text-muted-foreground mt-2">
-                    Come back tomorrow or hold more PULSE to increase your tier!
-                  </p>
+                  <div className="mt-3 flex items-center justify-between">
+                    <p className="text-xs text-muted-foreground">
+                      Come back tomorrow or hold more PULSE to increase your tier!
+                    </p>
+                    <Link href="/swap">
+                      <Button variant="outline" size="sm" className="ml-2 border-primary/50 text-primary hover:bg-primary/10">
+                        Get PULSE <ArrowUpRight className="w-3 h-3 ml-1" />
+                      </Button>
+                    </Link>
+                  </div>
                 )}
               </CardContent>
             </Card>
@@ -507,9 +514,16 @@ export default function PollDetails() {
                     )}
                   </Button>
                   {!canVoteToday && isConnected && (
-                    <p className="text-xs text-center text-muted-foreground">
-                      Hold more PULSE or maintain your streak to unlock more votes
-                    </p>
+                    <div className="text-center space-y-2">
+                      <p className="text-xs text-muted-foreground">
+                        Hold more PULSE or maintain your streak to unlock more votes
+                      </p>
+                      <Link href="/swap">
+                        <Button variant="link" size="sm" className="text-primary h-auto p-0">
+                          Upgrade your tier <ArrowUpRight className="w-3 h-3 ml-1" />
+                        </Button>
+                      </Link>
+                    </div>
                   )}
                 </div>
               ) : (

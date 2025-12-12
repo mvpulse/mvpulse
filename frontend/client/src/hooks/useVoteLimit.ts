@@ -5,7 +5,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
-import { TIER_NAMES, TIER_VOTE_LIMITS, type UserProfile } from "@shared/schema";
+import { TIER_NAMES, TIER_VOTE_LIMITS } from "@shared/schema";
 
 export interface VoteLimitInfo {
   canVote: boolean;
@@ -21,10 +21,10 @@ export interface VoteLimitInfo {
 interface VoteRemainingResponse {
   votesRemaining: number;
   votesUsed: number;
-  tierLimit: number;
+  voteLimit: number;
   tier: number;
   canVote: boolean;
-  profile: UserProfile;
+  streak: number;
 }
 
 interface RecordVoteResponse {
@@ -67,17 +67,18 @@ export function useVoteLimit(address: string | null | undefined) {
         throw new Error(`Failed to fetch vote limit: ${res.statusText}`);
       }
 
-      const data: VoteRemainingResponse = await res.json();
+      const response = await res.json();
+      const data: VoteRemainingResponse = response.data;
 
       return {
         canVote: data.canVote,
         votesRemaining: data.votesRemaining,
         votesUsed: data.votesUsed,
-        tierLimit: data.tierLimit,
+        tierLimit: data.voteLimit,
         tier: data.tier,
         tierName: TIER_NAMES[data.tier as keyof typeof TIER_NAMES] || "Bronze",
-        currentStreak: data.profile?.currentStreak || 0,
-        longestStreak: data.profile?.longestStreak || 0,
+        currentStreak: data.streak || 0,
+        longestStreak: 0,
       };
     },
     enabled: !!address,

@@ -20,6 +20,7 @@ import { useContract } from "@/hooks/useContract";
 import { useWalletConnection } from "@/hooks/useWalletConnection";
 import type { PollWithMeta } from "@/types/poll";
 import { POLL_STATUS } from "@/types/poll";
+import { getCoinSymbol, type CoinTypeId } from "@/lib/tokens";
 
 export default function CreatorDashboard() {
   const { isConnected, address } = useWalletConnection();
@@ -80,7 +81,8 @@ export default function CreatorDashboard() {
 
   // Render poll card
   const renderPollCard = (poll: PollWithMeta) => {
-    const rewardPoolMove = poll.reward_pool / 1e8;
+    const rewardPool = poll.reward_pool / 1e8;
+    const coinSymbol = getCoinSymbol(poll.coin_type_id as CoinTypeId);
     return (
       <PollCard
         key={poll.id}
@@ -89,7 +91,7 @@ export default function CreatorDashboard() {
         description={poll.description}
         votes={poll.totalVotes}
         timeLeft={poll.timeRemaining}
-        reward={rewardPoolMove > 0 ? `${rewardPoolMove.toFixed(2)} MOVE` : undefined}
+        reward={rewardPool > 0 ? `${rewardPool.toFixed(2)} ${coinSymbol}` : undefined}
         status={poll.isActive ? "active" : "closed"}
         tags={[]}
       />
