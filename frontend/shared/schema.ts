@@ -96,6 +96,7 @@ export const userProfiles = pgTable("user_profiles", {
   // Cached tier (recalculated on login/vote)
   cachedTier: integer("cached_tier").default(0).notNull(),
   cachedPulseBalance: varchar("cached_pulse_balance", { length: 50 }).default("0").notNull(),
+  cachedStakedPulse: varchar("cached_staked_pulse", { length: 50 }).default("0").notNull(),
   tierLastUpdated: timestamp("tier_last_updated"),
 
   createdAt: timestamp("created_at").defaultNow().notNull(),

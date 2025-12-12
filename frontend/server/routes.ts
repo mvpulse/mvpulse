@@ -33,18 +33,25 @@ const DAILY_SPONSORSHIP_LIMIT = 50; // Max sponsored transactions per address pe
 // ============================================
 
 /**
- * Calculate tier based on PULSE balance and streak
+ * Calculate tier based on PULSE holdings (balance + staked) and streak
+ * Tier is determined by total PULSE (wallet balance + staked amount)
  */
-function calculateTier(pulseBalance: bigint | string, streak: number): number {
+function calculateTier(
+  pulseBalance: bigint | string,
+  stakedPulse: bigint | string,
+  streak: number
+): number {
   const balance = typeof pulseBalance === "string" ? BigInt(pulseBalance) : pulseBalance;
+  const staked = typeof stakedPulse === "string" ? BigInt(stakedPulse) : stakedPulse;
+  const totalPulse = balance + staked;
 
-  // Determine tier from PULSE balance
+  // Determine tier from total PULSE (balance + staked)
   let tierFromPulse: number = TIERS.BRONZE;
-  if (balance >= BigInt(TIER_PULSE_THRESHOLDS[TIERS.PLATINUM])) {
+  if (totalPulse >= BigInt(TIER_PULSE_THRESHOLDS[TIERS.PLATINUM])) {
     tierFromPulse = TIERS.PLATINUM;
-  } else if (balance >= BigInt(TIER_PULSE_THRESHOLDS[TIERS.GOLD])) {
+  } else if (totalPulse >= BigInt(TIER_PULSE_THRESHOLDS[TIERS.GOLD])) {
     tierFromPulse = TIERS.GOLD;
-  } else if (balance >= BigInt(TIER_PULSE_THRESHOLDS[TIERS.SILVER])) {
+  } else if (totalPulse >= BigInt(TIER_PULSE_THRESHOLDS[TIERS.SILVER])) {
     tierFromPulse = TIERS.SILVER;
   }
 
@@ -100,6 +107,7 @@ async function getOrCreateProfile(walletAddress: string): Promise<UserProfile> {
       seasonVotes: 0,
       cachedTier: TIERS.BRONZE,
       cachedPulseBalance: "0",
+      cachedStakedPulse: "0",
     })
     .returning();
 
@@ -140,8 +148,8 @@ export async function registerRoutes(
         profile.lastVoteResetDate = today;
       }
 
-      // Calculate tier
-      const tier = calculateTier(profile.cachedPulseBalance, profile.currentStreak);
+      // Calculate tier (uses balance + staked)
+      const tier = calculateTier(profile.cachedPulseBalance, profile.cachedStakedPulse, profile.currentStreak);
       const voteLimit = TIER_VOTE_LIMITS[tier as keyof typeof TIER_VOTE_LIMITS];
 
       res.json({
@@ -162,26 +170,29 @@ export async function registerRoutes(
 
   /**
    * POST /api/user/sync-tier/:address
-   * Recalculate tier from on-chain PULSE balance
+   * Recalculate tier from on-chain PULSE balance and staked amount
    */
   app.post("/api/user/sync-tier/:address", async (req, res) => {
     try {
       const { address } = req.params;
-      const { pulseBalance } = req.body; // Frontend sends the fetched balance
+      const { pulseBalance, stakedAmount } = req.body; // Frontend sends both balance and staked amount
 
       if (pulseBalance === undefined) {
         return res.status(400).json({ success: false, error: "pulseBalance is required" });
       }
 
       const profile = await getOrCreateProfile(address);
-      const tier = calculateTier(pulseBalance, profile.currentStreak);
+      // Use provided stakedAmount or fall back to cached value
+      const staked = stakedAmount !== undefined ? stakedAmount.toString() : profile.cachedStakedPulse;
+      const tier = calculateTier(pulseBalance, staked, profile.currentStreak);
 
-      // Update cached tier and balance
+      // Update cached tier, balance, and staked amount
       const [updated] = await db
         .update(userProfiles)
         .set({
           cachedTier: tier,
           cachedPulseBalance: pulseBalance.toString(),
+          cachedStakedPulse: staked,
           tierLastUpdated: new Date(),
           updatedAt: new Date(),
         })
@@ -227,7 +238,7 @@ export async function registerRoutes(
         votesToday = 0;
       }
 
-      const tier = calculateTier(profile.cachedPulseBalance, profile.currentStreak);
+      const tier = calculateTier(profile.cachedPulseBalance, profile.cachedStakedPulse, profile.currentStreak);
       const voteLimit = TIER_VOTE_LIMITS[tier as keyof typeof TIER_VOTE_LIMITS];
 
       res.json({
@@ -339,7 +350,7 @@ export async function registerRoutes(
       // Update quest progress for vote-related quests
       // (This would trigger quest progress updates)
 
-      const tier = calculateTier(updated.cachedPulseBalance, updated.currentStreak);
+      const tier = calculateTier(updated.cachedPulseBalance, updated.cachedStakedPulse, updated.currentStreak);
       const voteLimit = TIER_VOTE_LIMITS[tier as keyof typeof TIER_VOTE_LIMITS];
 
       res.json({

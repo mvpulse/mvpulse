@@ -97,7 +97,7 @@ export function TierBadge({ tier, showVoteLimit = false, showTooltip = true, siz
             <p className="text-muted-foreground">{voteLimit} votes per day</p>
             {pulseThreshold > 0 && (
               <p className="text-muted-foreground">
-                Requires {(pulseThreshold / 1e8).toLocaleString()} PULSE
+                Requires {(pulseThreshold / 1e8).toLocaleString()} PULSE (wallet + staked)
               </p>
             )}
           </div>
@@ -111,11 +111,12 @@ export function TierBadge({ tier, showVoteLimit = false, showTooltip = true, siz
 interface TierProgressProps {
   currentTier: number;
   pulseBalance: string;
+  stakedPulse?: string;
   streak: number;
 }
 
-export function TierProgress({ currentTier, pulseBalance, streak }: TierProgressProps) {
-  const balance = BigInt(pulseBalance);
+export function TierProgress({ currentTier, pulseBalance, stakedPulse = "0", streak }: TierProgressProps) {
+  const balance = BigInt(pulseBalance) + BigInt(stakedPulse);
   const nextTier = Math.min(currentTier + 1, TIERS.PLATINUM);
 
   if (currentTier >= TIERS.PLATINUM) {

@@ -30,6 +30,11 @@ const SWAP_ADDRESSES: Record<"testnet" | "mainnet", string> = {
   mainnet: import.meta.env.VITE_MAINNET_SWAP_CONTRACT_ADDRESS || "",
 };
 
+const STAKING_ADDRESSES: Record<"testnet" | "mainnet", string> = {
+  testnet: import.meta.env.VITE_TESTNET_STAKING_CONTRACT_ADDRESS || "",
+  mainnet: import.meta.env.VITE_MAINNET_STAKING_CONTRACT_ADDRESS || "",
+};
+
 /**
  * Check if a token uses the Fungible Asset standard
  * MOVE uses legacy coin, PULSE and USDC use Fungible Asset
@@ -258,4 +263,11 @@ export function getCoinStoreType(
  */
 export function getSwapContractAddress(network: "testnet" | "mainnet"): string {
   return SWAP_ADDRESSES[network];
+}
+
+/**
+ * Get the staking contract address for a network
+ */
+export function getStakingContractAddress(network: "testnet" | "mainnet"): string {
+  return STAKING_ADDRESSES[network];
 }

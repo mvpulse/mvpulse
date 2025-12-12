@@ -516,11 +516,11 @@ export default function PollDetails() {
                   {!canVoteToday && isConnected && (
                     <div className="text-center space-y-2">
                       <p className="text-xs text-muted-foreground">
-                        Hold more PULSE or maintain your streak to unlock more votes
+                        Stake PULSE or maintain your streak to unlock more votes
                       </p>
-                      <Link href="/swap">
+                      <Link href="/staking">
                         <Button variant="link" size="sm" className="text-primary h-auto p-0">
-                          Upgrade your tier <ArrowUpRight className="w-3 h-3 ml-1" />
+                          Stake to upgrade tier <ArrowUpRight className="w-3 h-3 ml-1" />
                         </Button>
                       </Link>
                     </div>
