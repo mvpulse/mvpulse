@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -44,7 +44,7 @@ import { useUserProfile } from "@/hooks/useUserProfile";
 export default function StakingPage() {
   const { isConnected, address } = useWalletConnection();
   const { network, config } = useNetwork();
-  const { profile, tier, stakedPulse, syncTier, isSyncingTier } = useUserProfile(address || undefined);
+  const { profile, stakedPulse, syncTier, isSyncingTier } = useUserProfile(address || undefined);
 
   const {
     isConfigured,
@@ -94,6 +94,16 @@ export default function StakingPage() {
   // Get PULSE balance
   const pulseBalance = balances?.[COIN_TYPES.PULSE]?.balance ?? 0;
   const pulseBalanceFormatted = balances?.[COIN_TYPES.PULSE]?.balanceFormatted ?? "0.0000";
+
+  // Calculate tier from live on-chain data (not cached database value)
+  // This ensures the displayed tier is always accurate based on current wallet + staked balance
+  const liveTier = useMemo(() => {
+    const totalPulse = pulseBalance + totalStaked;
+    if (totalPulse >= TIER_PULSE_THRESHOLDS[TIERS.PLATINUM]) return TIERS.PLATINUM;
+    if (totalPulse >= TIER_PULSE_THRESHOLDS[TIERS.GOLD]) return TIERS.GOLD;
+    if (totalPulse >= TIER_PULSE_THRESHOLDS[TIERS.SILVER]) return TIERS.SILVER;
+    return TIERS.BRONZE;
+  }, [pulseBalance, totalStaked]);
 
   // Auto-sync tier when page loads with fresh balance/staking data
   useEffect(() => {
@@ -247,11 +257,11 @@ export default function StakingPage() {
     return `${minutes}m`;
   };
 
-  // Calculate progress to next tier
+  // Calculate progress to next tier (using liveTier from on-chain data)
   const getNextTierProgress = () => {
     const totalPulse = pulseBalance + totalStaked;
 
-    if (tier >= TIERS.PLATINUM) return { progress: 100, nextTier: null, remaining: 0 };
+    if (liveTier >= TIERS.PLATINUM) return { progress: 100, nextTier: null, remaining: 0 };
 
     const thresholds = [
       { tier: TIERS.SILVER, threshold: TIER_PULSE_THRESHOLDS[TIERS.SILVER] },
@@ -259,10 +269,10 @@ export default function StakingPage() {
       { tier: TIERS.PLATINUM, threshold: TIER_PULSE_THRESHOLDS[TIERS.PLATINUM] },
     ];
 
-    const nextTierInfo = thresholds.find(t => t.tier > tier);
+    const nextTierInfo = thresholds.find(t => t.tier > liveTier);
     if (!nextTierInfo) return { progress: 100, nextTier: null, remaining: 0 };
 
-    const currentThreshold = tier === TIERS.BRONZE ? 0 : TIER_PULSE_THRESHOLDS[tier as keyof typeof TIER_PULSE_THRESHOLDS];
+    const currentThreshold = liveTier === TIERS.BRONZE ? 0 : TIER_PULSE_THRESHOLDS[liveTier as keyof typeof TIER_PULSE_THRESHOLDS];
     const range = nextTierInfo.threshold - currentThreshold;
     const progress = Math.min(100, ((totalPulse - currentThreshold) / range) * 100);
     const remaining = Math.max(0, nextTierInfo.threshold - totalPulse);
@@ -418,7 +428,7 @@ export default function StakingPage() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Badge variant="default" className="text-lg px-3 py-1">
-                    {TIER_NAMES[tier as keyof typeof TIER_NAMES]}
+                    {TIER_NAMES[liveTier as keyof typeof TIER_NAMES]}
                   </Badge>
                 </div>
                 {tierProgress.nextTier && (
@@ -634,7 +644,7 @@ export default function StakingPage() {
                   <p className="text-sm text-muted-foreground mb-1">After staking:</p>
                   <div className="flex items-center gap-2">
                     <Badge variant="outline">
-                      {TIER_NAMES[tier as keyof typeof TIER_NAMES]}
+                      {TIER_NAMES[liveTier as keyof typeof TIER_NAMES]}
                     </Badge>
                     <ArrowUpRight className="w-4 h-4 text-muted-foreground" />
                     <Badge variant="default" className="bg-purple-600">
