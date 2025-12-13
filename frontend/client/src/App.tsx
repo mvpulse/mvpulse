@@ -13,6 +13,7 @@ import PollDetails from "@/pages/PollDetails";
 import Admin from "@/pages/Admin";
 import Wallet from "@/pages/Wallet";
 import Swap from "@/pages/Swap";
+import Staking from "@/pages/Staking";
 import Settings from "@/pages/Settings";
 import NotFound from "@/pages/not-found";
 
@@ -44,6 +45,7 @@ function App() {
             <Route path="/poll/:id" component={PollDetails} />
             <Route path="/wallet" component={Wallet} />
             <Route path="/swap" component={Swap} />
+            <Route path="/staking" component={Staking} />
             <Route path="/settings" component={Settings} />
             <Route path="/admin" component={Admin} />
 

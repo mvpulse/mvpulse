@@ -43,6 +43,10 @@ import { createAptosClient } from "@/lib/contract";
 import { submitPrivyTransaction } from "@/lib/privy-transactions";
 import { useActivityEvents } from "@/hooks/useActivityEvents";
 import { formatRelativeTime } from "@/lib/events";
+import { useStaking } from "@/hooks/useStaking";
+import { Progress } from "@/components/ui/progress";
+import { TIER_NAMES, TIER_PULSE_THRESHOLDS, TIERS } from "@shared/schema";
+import { Lock, Unlock, TrendingUp, ChevronRight } from "lucide-react";
 
 export default function WalletPage() {
   const { isConnected, address, isPrivyWallet } = useWalletConnection();
@@ -67,6 +71,14 @@ export default function WalletPage() {
 
   // Activity events
   const { data: activityEvents, isLoading: isLoadingActivity } = useActivityEvents(address || undefined);
+
+  // Staking info
+  const {
+    isConfigured: isStakingConfigured,
+    totalStaked,
+    unlockableAmount,
+    isLoading: isLoadingStaking,
+  } = useStaking();
 
   // Fetch all balances
   const fetchBalance = useCallback(async () => {
@@ -590,6 +602,50 @@ export default function WalletPage() {
               )}
             </CardContent>
           </Card>
+
+          {/* Staking Summary Card */}
+          {isStakingConfigured && (
+            <Card className="border-purple-500/30 bg-purple-500/5">
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Lock className="w-4 h-4 text-purple-500" />
+                  PULSE Staking
+                </CardTitle>
+                <CardDescription>
+                  Stake PULSE to boost your tier
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {isLoadingStaking ? (
+                  <Skeleton className="h-16 w-full" />
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-2 rounded-lg bg-muted/50">
+                        <p className="text-xs text-muted-foreground">Staked</p>
+                        <p className="font-mono font-bold">
+                          {(totalStaked / 1e8).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                        </p>
+                      </div>
+                      <div className="p-2 rounded-lg bg-muted/50">
+                        <p className="text-xs text-muted-foreground">Unlockable</p>
+                        <p className="font-mono font-bold text-green-600">
+                          {(unlockableAmount / 1e8).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                        </p>
+                      </div>
+                    </div>
+                    <Link href="/staking">
+                      <Button className="w-full bg-purple-600 hover:bg-purple-700">
+                        <Lock className="w-4 h-4 mr-2" />
+                        Manage Staking
+                        <ChevronRight className="w-4 h-4 ml-auto" />
+                      </Button>
+                    </Link>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           {/* Transfer Tokens Card */}
           <Card>

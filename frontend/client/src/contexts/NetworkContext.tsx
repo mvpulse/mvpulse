@@ -5,6 +5,7 @@ export type NetworkType = "testnet" | "mainnet";
 interface NetworkConfig {
   name: string;
   contractAddress: string;
+  stakingContractAddress: string;
   rpcUrl: string; // Proxy URL for regular fetch requests
   fullnodeUrl: string; // Actual RPC URL for Aptos SDK
   indexerUrl: string; // GraphQL Indexer endpoint
@@ -22,6 +23,7 @@ const NETWORK_CONFIGS: Record<NetworkType, NetworkConfig> = {
   testnet: {
     name: "Testnet",
     contractAddress: import.meta.env.VITE_TESTNET_CONTRACT_ADDRESS || "",
+    stakingContractAddress: import.meta.env.VITE_TESTNET_STAKING_CONTRACT_ADDRESS || "",
     rpcUrl: import.meta.env.VITE_TESTNET_RPC_URL || "https://testnet.movementnetwork.xyz/v1",
     fullnodeUrl: "https://testnet.movementnetwork.xyz/v1",
     indexerUrl: "https://indexer.testnet.movementnetwork.xyz/v1/graphql",
@@ -31,6 +33,7 @@ const NETWORK_CONFIGS: Record<NetworkType, NetworkConfig> = {
   mainnet: {
     name: "Mainnet",
     contractAddress: import.meta.env.VITE_MAINNET_CONTRACT_ADDRESS || "",
+    stakingContractAddress: import.meta.env.VITE_MAINNET_STAKING_CONTRACT_ADDRESS || "",
     rpcUrl: import.meta.env.VITE_MAINNET_RPC_URL || "https://full.mainnet.movementinfra.xyz/v1",
     fullnodeUrl: "https://full.mainnet.movementinfra.xyz/v1",
     indexerUrl: "https://indexer.mainnet.movementnetwork.xyz/v1/graphql",

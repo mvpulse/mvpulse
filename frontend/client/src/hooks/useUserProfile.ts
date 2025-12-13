@@ -15,9 +15,15 @@ export interface UserProfileInfo {
   longestStreak: number;
   votesToday: number;
   pulseBalance: string;
+  stakedPulse: string;
   seasonPoints: number;
   seasonVotes: number;
   lastVoteDate: string | null;
+}
+
+interface SyncTierInput {
+  pulseBalance: string;
+  stakedAmount?: string;
 }
 
 interface ProfileResponse {
@@ -62,6 +68,7 @@ export function useUserProfile(address: string | undefined) {
         longestStreak: data.profile.longestStreak,
         votesToday: data.profile.votesToday,
         pulseBalance: data.profile.cachedPulseBalance,
+        stakedPulse: data.profile.cachedStakedPulse,
         seasonPoints: data.profile.seasonPoints,
         seasonVotes: data.profile.seasonVotes,
         lastVoteDate: data.profile.lastVoteDate,
@@ -72,14 +79,17 @@ export function useUserProfile(address: string | undefined) {
     refetchOnWindowFocus: true,
   });
 
-  // Mutation to sync tier from on-chain PULSE balance
-  const syncTierMutation = useMutation<SyncTierResponse, Error>({
-    mutationFn: async () => {
+  // Mutation to sync tier from on-chain PULSE balance and staked amount
+  const syncTierMutation = useMutation<SyncTierResponse, Error, SyncTierInput>({
+    mutationFn: async (input: SyncTierInput) => {
       if (!address) {
         throw new Error("No wallet address provided");
       }
 
-      const res = await apiRequest("POST", `/api/user/sync-tier/${address}`);
+      const res = await apiRequest("POST", `/api/user/sync-tier/${address}`, {
+        pulseBalance: input.pulseBalance,
+        stakedAmount: input.stakedAmount,
+      });
       return res.json();
     },
     onSuccess: () => {
@@ -97,6 +107,7 @@ export function useUserProfile(address: string | undefined) {
     currentStreak: profileQuery.data?.currentStreak ?? 0,
     longestStreak: profileQuery.data?.longestStreak ?? 0,
     pulseBalance: profileQuery.data?.pulseBalance ?? "0",
+    stakedPulse: profileQuery.data?.stakedPulse ?? "0",
     seasonPoints: profileQuery.data?.seasonPoints ?? 0,
     seasonVotes: profileQuery.data?.seasonVotes ?? 0,
 
