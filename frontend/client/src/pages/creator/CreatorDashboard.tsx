@@ -63,13 +63,21 @@ export default function CreatorDashboard() {
   const myClosedPolls = myPolls.filter((p) => !p.isActive);
   const myClaimingPolls = myPolls.filter((p) => p.status === POLL_STATUS.CLAIMING);
 
-  // Calculate stats
-  const stats = useMemo(() => ({
-    totalPolls: myPolls.length,
-    totalResponses: myPolls.reduce((sum, p) => sum + p.totalVotes, 0),
-    activePolls: myActivePolls.length,
-    totalFunded: myPolls.reduce((sum, p) => sum + (p.reward_pool / 1e8), 0),
-  }), [myPolls, myActivePolls]);
+  // Calculate stats - group funded by token type
+  const stats = useMemo(() => {
+    const fundedByToken: Record<string, number> = {};
+    myPolls.forEach((p) => {
+      const coinSymbol = getCoinSymbol(p.coin_type_id as CoinTypeId);
+      fundedByToken[coinSymbol] = (fundedByToken[coinSymbol] || 0) + (p.reward_pool / 1e8);
+    });
+
+    return {
+      totalPolls: myPolls.length,
+      totalResponses: myPolls.reduce((sum, p) => sum + p.totalVotes, 0),
+      activePolls: myActivePolls.length,
+      fundedByToken,
+    };
+  }, [myPolls, myActivePolls]);
 
   // Get chart data for responses by poll
   const responsesData = useMemo(() => {
@@ -184,9 +192,17 @@ export default function CreatorDashboard() {
                   <p className="text-sm text-muted-foreground">Total Funded</p>
                   <Coins className="w-4 h-4 text-muted-foreground" />
                 </div>
-                <p className="text-3xl font-bold font-mono mt-2">
-                  {stats.totalFunded.toFixed(4)} <span className="text-lg">MOVE</span>
-                </p>
+                <div className="mt-2">
+                  {Object.keys(stats.fundedByToken).length === 0 ? (
+                    <p className="text-3xl font-bold font-mono">0</p>
+                  ) : (
+                    Object.entries(stats.fundedByToken).map(([token, amount]) => (
+                      <p key={token} className="text-2xl font-bold font-mono">
+                        {amount.toFixed(4)} <span className="text-base">{token}</span>
+                      </p>
+                    ))
+                  )}
+                </div>
                 <p className="text-xs text-muted-foreground mt-1">Rewards distributed</p>
               </CardContent>
             </Card>

@@ -97,24 +97,41 @@ export default function ParticipantDashboard() {
     return polls.filter((p) => p.isActive && !votedPollIds.has(p.id));
   }, [polls, votedPollIds]);
 
-  // Calculate stats
+  // Calculate stats - group rewards by token type
   const stats = useMemo(() => {
-    const pendingRewards = claimablePolls.reduce((sum, p) => {
+    // Group pending rewards by coin type
+    const pendingByToken: Record<string, number> = {};
+    claimablePolls.forEach((p) => {
       const perVoter = p.reward_per_vote > 0
         ? p.reward_per_vote / 1e8
         : p.totalVotes > 0
         ? (p.reward_pool / 1e8) / p.totalVotes
         : 0;
-      return sum + perVoter;
-    }, 0);
+      const coinSymbol = getCoinSymbol(p.coin_type_id as CoinTypeId);
+      pendingByToken[coinSymbol] = (pendingByToken[coinSymbol] || 0) + perVoter;
+    });
+
+    // Group claimed rewards by coin type (polls user has voted on and claimed)
+    const earnedByToken: Record<string, number> = {};
+    votedPolls.forEach((p) => {
+      if (claimedPollIds.has(p.id) && p.reward_pool > 0) {
+        const perVoter = p.reward_per_vote > 0
+          ? p.reward_per_vote / 1e8
+          : p.totalVotes > 0
+          ? (p.reward_pool / 1e8) / p.totalVotes
+          : 0;
+        const coinSymbol = getCoinSymbol(p.coin_type_id as CoinTypeId);
+        earnedByToken[coinSymbol] = (earnedByToken[coinSymbol] || 0) + perVoter;
+      }
+    });
 
     return {
       pollsVoted: votedPolls.length,
-      pendingRewards,
-      totalEarned: 0, // Would need to track claimed amounts
+      pendingByToken,
+      earnedByToken,
       activePolls: availablePolls.length,
     };
-  }, [votedPolls, claimablePolls, availablePolls]);
+  }, [votedPolls, claimablePolls, claimedPollIds, availablePolls]);
 
   // Handle claim reward
   const handleClaim = async (pollId: number, coinTypeId: CoinTypeId) => {
@@ -219,9 +236,17 @@ export default function ParticipantDashboard() {
                   <p className="text-sm text-muted-foreground">Pending Rewards</p>
                   <Clock className="w-4 h-4 text-muted-foreground" />
                 </div>
-                <p className="text-3xl font-bold font-mono mt-2">
-                  {stats.pendingRewards.toFixed(4)} <span className="text-lg">MOVE</span>
-                </p>
+                <div className="mt-2">
+                  {Object.keys(stats.pendingByToken).length === 0 ? (
+                    <p className="text-3xl font-bold font-mono">0</p>
+                  ) : (
+                    Object.entries(stats.pendingByToken).map(([token, amount]) => (
+                      <p key={token} className="text-2xl font-bold font-mono">
+                        {amount.toFixed(4)} <span className="text-base">{token}</span>
+                      </p>
+                    ))
+                  )}
+                </div>
                 <p className="text-xs text-muted-foreground mt-1">Ready to claim</p>
               </CardContent>
             </Card>
@@ -232,9 +257,17 @@ export default function ParticipantDashboard() {
                   <p className="text-sm text-muted-foreground">Total Earned</p>
                   <Coins className="w-4 h-4 text-muted-foreground" />
                 </div>
-                <p className="text-3xl font-bold font-mono mt-2">
-                  {stats.totalEarned.toFixed(4)} <span className="text-lg">MOVE</span>
-                </p>
+                <div className="mt-2">
+                  {Object.keys(stats.earnedByToken).length === 0 ? (
+                    <p className="text-3xl font-bold font-mono">0</p>
+                  ) : (
+                    Object.entries(stats.earnedByToken).map(([token, amount]) => (
+                      <p key={token} className="text-2xl font-bold font-mono">
+                        {amount.toFixed(4)} <span className="text-base">{token}</span>
+                      </p>
+                    ))
+                  )}
+                </div>
                 <p className="text-xs text-muted-foreground mt-1">All time rewards</p>
               </CardContent>
             </Card>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useLocation, Link } from "wouter";
 import { PollCard } from "@/components/PollCard";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { useContract } from "@/hooks/useContract";
 import { useWalletConnection } from "@/hooks/useWalletConnection";
 import type { PollWithMeta } from "@/types/poll";
+import { getCoinSymbol, type CoinTypeId } from "@/lib/tokens";
 
 export default function Dashboard() {
   const [location] = useLocation();
@@ -72,16 +73,22 @@ export default function Dashboard() {
     );
   };
 
-  // Calculate stats
-  const stats = {
-    activePolls: role === "creator" ? myActivePolls.length : activePolls.length,
-    totalVotes: (role === "creator" ? myPolls : polls).reduce((sum, p) => sum + p.totalVotes, 0),
-    totalRewards: (role === "creator" ? myPolls : polls).reduce(
-      (sum, p) => sum + (p.reward_pool / 1e8),
-      0
-    ),
-    pollCount: role === "creator" ? myPolls.length : polls.length,
-  };
+  // Calculate stats - group rewards by token type
+  const stats = useMemo(() => {
+    const relevantPolls = role === "creator" ? myPolls : polls;
+    const rewardsByToken: Record<string, number> = {};
+    relevantPolls.forEach((p) => {
+      const coinSymbol = getCoinSymbol(p.coin_type_id as CoinTypeId);
+      rewardsByToken[coinSymbol] = (rewardsByToken[coinSymbol] || 0) + (p.reward_pool / 1e8);
+    });
+
+    return {
+      activePolls: role === "creator" ? myActivePolls.length : activePolls.length,
+      totalVotes: relevantPolls.reduce((sum, p) => sum + p.totalVotes, 0),
+      rewardsByToken,
+      pollCount: relevantPolls.length,
+    };
+  }, [role, myPolls, polls, myActivePolls, activePolls]);
 
   // Get the polls to display based on role
   const getDisplayPolls = (tab: "active" | "completed") => {
@@ -92,7 +99,8 @@ export default function Dashboard() {
 
   // Render poll card from PollWithMeta
   const renderPollCard = (poll: PollWithMeta) => {
-    const rewardPoolMove = poll.reward_pool / 1e8;
+    const rewardPool = poll.reward_pool / 1e8;
+    const coinSymbol = getCoinSymbol(poll.coin_type_id as CoinTypeId);
     return (
       <PollCard
         key={poll.id}
@@ -101,7 +109,7 @@ export default function Dashboard() {
         description={poll.description}
         votes={poll.totalVotes}
         timeLeft={poll.timeRemaining}
-        reward={rewardPoolMove > 0 ? `${rewardPoolMove.toFixed(2)} MOVE` : undefined}
+        reward={rewardPool > 0 ? `${rewardPool.toFixed(2)} ${coinSymbol}` : undefined}
         status={poll.isActive ? "active" : "closed"}
         tags={[]}
       />
@@ -161,7 +169,12 @@ export default function Dashboard() {
           },
           {
             label: "Rewards Pool",
-            value: isLoading ? "-" : `${stats.totalRewards.toFixed(2)} MOVE`,
+            value: isLoading ? "-" : (
+              Object.keys(stats.rewardsByToken).length === 0 ? "0" :
+              Object.entries(stats.rewardsByToken).map(([token, amount]) =>
+                `${amount.toFixed(2)} ${token}`
+              ).join(" + ")
+            ),
             change: "Total distributed",
           },
           {

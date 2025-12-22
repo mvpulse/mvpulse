@@ -23,6 +23,7 @@ import type { PollWithMeta } from "@/types/poll";
 import { POLL_STATUS, DISTRIBUTION_MODE } from "@/types/poll";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { showTransactionSuccessToast, showTransactionErrorToast } from "@/lib/transaction-feedback";
+import { getCoinSymbol, type CoinTypeId } from "@/lib/tokens";
 
 export default function Distributions() {
   const { isConnected, address } = useWalletConnection();
@@ -90,14 +91,25 @@ export default function Distributions() {
 
   // Calculate totals
   const totals = useMemo(() => {
-    const pending = pendingDistributions.reduce((sum, p) => sum + (p.reward_pool / 1e8), 0);
-    const distributed = myPolls
+    // Group pending by token
+    const pendingByToken: Record<string, number> = {};
+    pendingDistributions.forEach((p) => {
+      const coinSymbol = getCoinSymbol(p.coin_type_id as CoinTypeId);
+      pendingByToken[coinSymbol] = (pendingByToken[coinSymbol] || 0) + (p.reward_pool / 1e8);
+    });
+
+    // Group distributed by token
+    const distributedByToken: Record<string, number> = {};
+    myPolls
       .filter((p) => p.rewards_distributed)
-      .reduce((sum, p) => sum + (p.reward_pool / 1e8), 0);
+      .forEach((p) => {
+        const coinSymbol = getCoinSymbol(p.coin_type_id as CoinTypeId);
+        distributedByToken[coinSymbol] = (distributedByToken[coinSymbol] || 0) + (p.reward_pool / 1e8);
+      });
 
     return {
-      pendingAmount: pending,
-      distributedAmount: distributed,
+      pendingByToken,
+      distributedByToken,
       pendingCount: pendingDistributions.length,
     };
   }, [pendingDistributions, myPolls]);
@@ -159,9 +171,19 @@ export default function Distributions() {
               <p className="text-sm text-muted-foreground">Pending Distribution</p>
               <Clock className="w-4 h-4 text-muted-foreground" />
             </div>
-            <p className="text-3xl font-bold font-mono mt-2">
-              {isLoading ? "-" : `${totals.pendingAmount.toFixed(4)}`} <span className="text-lg">MOVE</span>
-            </p>
+            <div className="mt-2">
+              {isLoading ? (
+                <p className="text-3xl font-bold font-mono">-</p>
+              ) : Object.keys(totals.pendingByToken).length === 0 ? (
+                <p className="text-3xl font-bold font-mono">0</p>
+              ) : (
+                Object.entries(totals.pendingByToken).map(([token, amount]) => (
+                  <p key={token} className="text-2xl font-bold font-mono">
+                    {amount.toFixed(4)} <span className="text-base">{token}</span>
+                  </p>
+                ))
+              )}
+            </div>
             <p className="text-xs text-muted-foreground mt-1">
               From {totals.pendingCount} poll(s)
             </p>
@@ -174,9 +196,19 @@ export default function Distributions() {
               <p className="text-sm text-muted-foreground">Total Distributed</p>
               <Coins className="w-4 h-4 text-muted-foreground" />
             </div>
-            <p className="text-3xl font-bold font-mono mt-2">
-              {isLoading ? "-" : `${totals.distributedAmount.toFixed(4)}`} <span className="text-lg">MOVE</span>
-            </p>
+            <div className="mt-2">
+              {isLoading ? (
+                <p className="text-3xl font-bold font-mono">-</p>
+              ) : Object.keys(totals.distributedByToken).length === 0 ? (
+                <p className="text-3xl font-bold font-mono">0</p>
+              ) : (
+                Object.entries(totals.distributedByToken).map(([token, amount]) => (
+                  <p key={token} className="text-2xl font-bold font-mono">
+                    {amount.toFixed(4)} <span className="text-base">{token}</span>
+                  </p>
+                ))
+              )}
+            </div>
             <p className="text-xs text-muted-foreground mt-1">All time</p>
           </CardContent>
         </Card>
@@ -221,8 +253,9 @@ export default function Distributions() {
           ) : (
             <div className="space-y-3">
               {pendingDistributions.map((poll) => {
-                const rewardPoolMove = poll.reward_pool / 1e8;
-                const perVoter = poll.totalVotes > 0 ? rewardPoolMove / poll.totalVotes : 0;
+                const rewardPool = poll.reward_pool / 1e8;
+                const coinSymbol = getCoinSymbol(poll.coin_type_id as CoinTypeId);
+                const perVoter = poll.totalVotes > 0 ? rewardPool / poll.totalVotes : 0;
 
                 return (
                   <div
@@ -241,7 +274,7 @@ export default function Distributions() {
                         </Badge>
                       </div>
                       <p className="text-sm text-muted-foreground">
-                        {rewardPoolMove.toFixed(4)} MOVE total • ~{perVoter.toFixed(4)} MOVE per voter
+                        {rewardPool.toFixed(4)} {coinSymbol} total • ~{perVoter.toFixed(4)} {coinSymbol} per voter
                       </p>
                     </div>
                     <Button
@@ -286,7 +319,8 @@ export default function Distributions() {
           ) : (
             <div className="divide-y divide-border/50">
               {claimingPolls.map((poll) => {
-                const rewardPoolMove = poll.reward_pool / 1e8;
+                const rewardPool = poll.reward_pool / 1e8;
+                const coinSymbol = getCoinSymbol(poll.coin_type_id as CoinTypeId);
                 const claimedCount = poll.claimed.length;
 
                 return (
@@ -301,7 +335,7 @@ export default function Distributions() {
                         </p>
                       </Link>
                       <p className="text-sm text-muted-foreground">
-                        {claimedCount}/{poll.totalVotes} claimed • {rewardPoolMove.toFixed(4)} MOVE remaining
+                        {claimedCount}/{poll.totalVotes} claimed • {rewardPool.toFixed(4)} {coinSymbol} remaining
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -344,7 +378,8 @@ export default function Distributions() {
               {completedDistributions
                 .filter((p) => p.rewards_distributed)
                 .map((poll) => {
-                  const rewardPoolMove = poll.reward_pool / 1e8;
+                  const rewardPool = poll.reward_pool / 1e8;
+                  const coinSymbol = getCoinSymbol(poll.coin_type_id as CoinTypeId);
 
                   return (
                     <div
@@ -358,7 +393,7 @@ export default function Distributions() {
                           </p>
                         </Link>
                         <p className="text-sm text-muted-foreground">
-                          {poll.totalVotes} voters • {rewardPoolMove.toFixed(4)} MOVE distributed
+                          {poll.totalVotes} voters • {rewardPool.toFixed(4)} {coinSymbol} distributed
                         </p>
                       </div>
                       <div className="flex items-center gap-2">

@@ -19,6 +19,7 @@ import {
   MoreHorizontal,
   Loader2,
 } from "lucide-react";
+import { getCoinSymbol, type CoinTypeId } from "@/lib/tokens";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -292,7 +293,8 @@ export default function ManagePolls() {
             ) : (
               <div className="divide-y divide-border/50">
                 {filteredPolls.map((poll) => {
-                  const rewardPoolMove = poll.reward_pool / 1e8;
+                  const rewardPool = poll.reward_pool / 1e8;
+                  const coinSymbol = getCoinSymbol(poll.coin_type_id as CoinTypeId);
                   const isActionLoading = actionLoading?.pollId === poll.id;
 
                   return (
@@ -309,7 +311,7 @@ export default function ManagePolls() {
                           {getStatusBadge(poll)}
                         </div>
                         <p className="text-sm text-muted-foreground">
-                          {poll.totalVotes} votes • {rewardPoolMove.toFixed(4)} MOVE • {poll.timeRemaining}
+                          {poll.totalVotes} votes • {rewardPool.toFixed(4)} {coinSymbol} • {poll.timeRemaining}
                         </p>
                       </div>
 

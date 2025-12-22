@@ -58,35 +58,35 @@
   --card-foreground: 240 10% 3.9%;
   --popover: 0 0% 100%;
   --popover-foreground: 240 10% 3.9%;
-  
-  /* Primary: Vibrant Yellow for Movement/Energy */
-  --primary: 55 100% 50%; 
-  --primary-foreground: 240 10% 3.9%;
-  
+
+  /* Primary: Darker Amber/Gold for Light Mode (better contrast) */
+  --primary: 38 95% 42%;
+  --primary-foreground: 0 0% 100%;
+
   /* Secondary: Soft Grey */
   --secondary: 240 4.8% 95.9%;
   --secondary-foreground: 240 5.9% 10%;
-  
+
   --muted: 240 4.8% 95.9%;
   --muted-foreground: 240 3.8% 46.1%;
-  
-  --accent: 260 100% 60%; /* Ultraviolet Accent */
+
+  --accent: 260 100% 55%; /* Ultraviolet Accent */
   --accent-foreground: 0 0% 98%;
-  
+
   --destructive: 0 84.2% 60.2%;
   --destructive-foreground: 0 0% 98%;
-  
+
   --border: 240 5.9% 90%;
   --input: 240 5.9% 90%;
-  --ring: 55 100% 50%;
-  
+  --ring: 38 95% 42%;
+
   --radius: 0.5rem;
-  
-  --chart-1: 55 100% 50%;
-  --chart-2: 260 100% 60%;
-  --chart-3: 190 100% 50%;
-  --chart-4: 320 100% 60%;
-  --chart-5: 280 100% 70%;
+
+  --chart-1: 38 95% 50%;
+  --chart-2: 260 100% 55%;
+  --chart-3: 190 100% 40%;
+  --chart-4: 320 100% 50%;
+  --chart-5: 280 100% 60%;
 
   --sidebar: 0 0% 98%;
   --sidebar-foreground: 240 5.3% 26.1%;
