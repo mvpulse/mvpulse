@@ -85,7 +85,44 @@ export const participantTourSteps: Step[] = [
   },
 ];
 
+// Donor Tour Steps
+export const donorTourSteps: Step[] = [
+  {
+    target: '[data-tour="donor-welcome"]',
+    content: "Welcome to the Donor Dashboard! Let's explore how to fund polls and support projects.",
+    placement: "center",
+    disableBeacon: true,
+  },
+  {
+    target: '[data-tour="donor-stats"]',
+    content: "Track your donation stats - total donated, polls funded, and your impact.",
+    placement: "bottom",
+  },
+  {
+    target: '[data-tour="sidebar-explore"]',
+    content: "Browse all polls looking for funding. Find projects that align with your interests.",
+    placement: "right",
+  },
+  {
+    target: '[data-tour="sidebar-funded"]',
+    content: "View all the polls you've funded and track their progress.",
+    placement: "right",
+  },
+  {
+    target: '[data-tour="sidebar-history"]',
+    content: "Access your complete donation history here.",
+    placement: "right",
+  },
+  {
+    target: '[data-tour="sidebar-help"]',
+    content: "Need help? Click here anytime to restart this tour.",
+    placement: "right",
+  },
+];
+
 // Helper to get steps by role
-export function getTourSteps(role: "creator" | "participant"): Step[] {
-  return role === "creator" ? creatorTourSteps : participantTourSteps;
+export function getTourSteps(role: "creator" | "participant" | "donor"): Step[] {
+  if (role === "creator") return creatorTourSteps;
+  if (role === "donor") return donorTourSteps;
+  return participantTourSteps;
 }

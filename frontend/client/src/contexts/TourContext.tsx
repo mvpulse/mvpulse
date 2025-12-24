@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, ReactNode } from "react";
 
-export type TourRole = "creator" | "participant";
+export type TourRole = "creator" | "participant" | "donor";
 
 interface TourContextType {
   // Tour state
@@ -25,6 +25,7 @@ const TourContext = createContext<TourContextType | undefined>(undefined);
 const TOUR_STORAGE_KEYS = {
   creator: "mvpulse_tour_completed_creator",
   participant: "mvpulse_tour_completed_participant",
+  donor: "mvpulse_tour_completed_donor",
 } as const;
 
 interface TourProviderProps {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { CreatorLayout } from "@/components/layouts/CreatorLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -43,12 +43,11 @@ import { useContract } from "@/hooks/useContract";
 import { useWalletConnection } from "@/hooks/useWalletConnection";
 import type { PollWithMeta } from "@/types/poll";
 import { POLL_STATUS, DISTRIBUTION_MODE } from "@/types/poll";
-import { toast } from "sonner";
 import { useNetwork } from "@/contexts/NetworkContext";
-import { truncateAddress } from "@/lib/contract";
 import { showTransactionSuccessToast, showTransactionErrorToast } from "@/lib/transaction-feedback";
 
 export default function ManagePolls() {
+  const [, navigate] = useLocation();
   const { isConnected, address } = useWalletConnection();
   const { getAllPolls, startClaims, closePoll, distributeRewards, withdrawRemaining, finalizePoll, canFinalizePoll, contractAddress } = useContract();
   const { config } = useNetwork();
@@ -389,70 +388,73 @@ export default function ManagePolls() {
                           size="sm"
                           onClick={(e) => {
                             e.preventDefault();
-                            window.open(`/poll/${poll.id}`, "_blank");
+                            navigate(`/poll/${poll.id}`);
                           }}
                         >
                           <ExternalLink className="w-4 h-4" />
                         </Button>
 
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              disabled={isActionLoading}
-                              onClick={(e) => e.preventDefault()}
-                            >
-                              {isActionLoading ? (
-                                <Loader2 className="w-4 h-4 animate-spin" />
-                              ) : (
-                                <MoreHorizontal className="w-4 h-4" />
-                              )}
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            {/* ACTIVE polls: Start Claims */}
-                            {poll.status === POLL_STATUS.ACTIVE && (
-                              <DropdownMenuItem
-                                onClick={() => setClosePollModal({ open: true, pollId: poll.id })}
+                        {/* Hide dropdown for FINALIZED polls - no actions available */}
+                        {poll.status !== POLL_STATUS.FINALIZED && (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                disabled={isActionLoading}
+                                onClick={(e) => e.preventDefault()}
                               >
-                                <XCircle className="w-4 h-4 mr-2" /> Start Claims
-                              </DropdownMenuItem>
-                            )}
-                            {/* CLAIMING polls: Distribute Rewards (MANUAL_PUSH mode) */}
-                            {poll.status === POLL_STATUS.CLAIMING &&
-                              poll.distribution_mode === DISTRIBUTION_MODE.MANUAL_PUSH &&
-                              !poll.rewards_distributed && (
-                                <DropdownMenuItem onClick={() => handleDistribute(poll.id, poll.coin_type_id as CoinTypeId)}>
-                                  <Send className="w-4 h-4 mr-2" /> Distribute Rewards
+                                {isActionLoading ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <MoreHorizontal className="w-4 h-4" />
+                                )}
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              {/* ACTIVE polls: Start Claims */}
+                              {poll.status === POLL_STATUS.ACTIVE && (
+                                <DropdownMenuItem
+                                  onClick={() => setClosePollModal({ open: true, pollId: poll.id })}
+                                >
+                                  <XCircle className="w-4 h-4 mr-2" /> Start Claims
                                 </DropdownMenuItem>
                               )}
-                            {/* CLAIMING polls: Close Poll (stop claims/distributions) */}
-                            {poll.status === POLL_STATUS.CLAIMING && (
-                              <DropdownMenuItem onClick={() => handleClosePoll(poll.id)}>
-                                <XCircle className="w-4 h-4 mr-2" /> Close Poll
-                              </DropdownMenuItem>
-                            )}
-                            {/* CLOSED polls: Withdraw Remaining (during grace period) */}
-                            {poll.status === POLL_STATUS.CLOSED && poll.reward_pool > 0 && (
-                              <DropdownMenuItem onClick={() => handleWithdraw(poll.id, poll.coin_type_id as CoinTypeId)}>
-                                <Wallet className="w-4 h-4 mr-2" /> Withdraw Remaining
-                              </DropdownMenuItem>
-                            )}
-                            {/* CLOSED polls: Finalize Poll (when grace period elapsed) */}
-                            {poll.status === POLL_STATUS.CLOSED && finalizablePolls.has(poll.id) && (
-                              <DropdownMenuItem onClick={() => handleFinalize(poll.id, poll.coin_type_id as CoinTypeId)}>
-                                <Flag className="w-4 h-4 mr-2" /> Finalize Poll
-                              </DropdownMenuItem>
-                            )}
-                            {/* CLOSED polls: Show disabled finalize when grace period not elapsed */}
-                            {poll.status === POLL_STATUS.CLOSED && !finalizablePolls.has(poll.id) && (
-                              <DropdownMenuItem disabled className="text-muted-foreground">
-                                <Clock className="w-4 h-4 mr-2" /> Finalize (Grace period active)
-                              </DropdownMenuItem>
-                            )}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                              {/* CLAIMING polls: Distribute Rewards (MANUAL_PUSH mode) */}
+                              {poll.status === POLL_STATUS.CLAIMING &&
+                                poll.distribution_mode === DISTRIBUTION_MODE.MANUAL_PUSH &&
+                                !poll.rewards_distributed && (
+                                  <DropdownMenuItem onClick={() => handleDistribute(poll.id, poll.coin_type_id as CoinTypeId)}>
+                                    <Send className="w-4 h-4 mr-2" /> Distribute Rewards
+                                  </DropdownMenuItem>
+                                )}
+                              {/* CLAIMING polls: Close Poll (stop claims/distributions) */}
+                              {poll.status === POLL_STATUS.CLAIMING && (
+                                <DropdownMenuItem onClick={() => handleClosePoll(poll.id)}>
+                                  <XCircle className="w-4 h-4 mr-2" /> Close Poll
+                                </DropdownMenuItem>
+                              )}
+                              {/* CLOSED polls: Withdraw Remaining (during grace period) */}
+                              {poll.status === POLL_STATUS.CLOSED && poll.reward_pool > 0 && (
+                                <DropdownMenuItem onClick={() => handleWithdraw(poll.id, poll.coin_type_id as CoinTypeId)}>
+                                  <Wallet className="w-4 h-4 mr-2" /> Withdraw Remaining
+                                </DropdownMenuItem>
+                              )}
+                              {/* CLOSED polls: Finalize Poll (when grace period elapsed) */}
+                              {poll.status === POLL_STATUS.CLOSED && finalizablePolls.has(poll.id) && (
+                                <DropdownMenuItem onClick={() => handleFinalize(poll.id, poll.coin_type_id as CoinTypeId)}>
+                                  <Flag className="w-4 h-4 mr-2" /> Finalize Poll
+                                </DropdownMenuItem>
+                              )}
+                              {/* CLOSED polls: Show disabled finalize when grace period not elapsed */}
+                              {poll.status === POLL_STATUS.CLOSED && !finalizablePolls.has(poll.id) && (
+                                <DropdownMenuItem disabled className="text-muted-foreground">
+                                  <Clock className="w-4 h-4 mr-2" /> Finalize (Grace period active)
+                                </DropdownMenuItem>
+                              )}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
                       </div>
                     </Link>
                   );

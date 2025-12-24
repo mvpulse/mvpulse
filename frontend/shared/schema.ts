@@ -281,3 +281,134 @@ export const userSettings = pgTable("user_settings", {
 
 export type UserSettings = typeof userSettings.$inferSelect;
 export type InsertUserSettings = typeof userSettings.$inferInsert;
+
+// ============================================
+// Referral System Constants
+// ============================================
+
+export const REFERRAL_STATUS = {
+  PENDING: 0,
+  WALLET_CONNECTED: 1,
+  FIRST_VOTE: 2,
+  COMPLETED: 3,
+} as const;
+
+export const REFERRAL_MILESTONES = {
+  WALLET_CONNECT: "wallet_connect",
+  FIRST_VOTE: "first_vote",
+  VOTES_10: "votes_10",
+  VOTES_50: "votes_50",
+  VOTES_100: "votes_100",
+} as const;
+
+export const REFERRAL_REWARDS = {
+  [REFERRAL_MILESTONES.WALLET_CONNECT]: { referrer: 50, referee: 100 },
+  [REFERRAL_MILESTONES.FIRST_VOTE]: { referrer: 100, referee: 200 },
+  [REFERRAL_MILESTONES.VOTES_10]: { referrer: 200, referee: 0 },
+  [REFERRAL_MILESTONES.VOTES_50]: { referrer: 500, referee: 0 },
+  [REFERRAL_MILESTONES.VOTES_100]: { referrer: 1000, referee: 0 },
+} as const;
+
+export const REFERRAL_TIERS = {
+  NONE: 0,
+  BRONZE: 1,
+  SILVER: 2,
+  GOLD: 3,
+  PLATINUM: 4,
+} as const;
+
+export const REFERRAL_TIER_NAMES = {
+  [REFERRAL_TIERS.NONE]: "None",
+  [REFERRAL_TIERS.BRONZE]: "Bronze",
+  [REFERRAL_TIERS.SILVER]: "Silver",
+  [REFERRAL_TIERS.GOLD]: "Gold",
+  [REFERRAL_TIERS.PLATINUM]: "Platinum",
+} as const;
+
+export const REFERRAL_TIER_THRESHOLDS = {
+  [REFERRAL_TIERS.NONE]: 0,
+  [REFERRAL_TIERS.BRONZE]: 10,
+  [REFERRAL_TIERS.SILVER]: 50,
+  [REFERRAL_TIERS.GOLD]: 100,
+  [REFERRAL_TIERS.PLATINUM]: 250,
+} as const;
+
+export const REFERRAL_TIER_MULTIPLIERS = {
+  [REFERRAL_TIERS.NONE]: 1.0,
+  [REFERRAL_TIERS.BRONZE]: 1.25,
+  [REFERRAL_TIERS.SILVER]: 1.5,
+  [REFERRAL_TIERS.GOLD]: 2.0,
+  [REFERRAL_TIERS.PLATINUM]: 3.0,
+} as const;
+
+// ============================================
+// Referral Codes (short codes mapped to wallet addresses)
+// ============================================
+
+export const referralCodes = pgTable("referral_codes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  walletAddress: varchar("wallet_address", { length: 66 }).notNull().unique(),
+  code: varchar("code", { length: 20 }).notNull().unique(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type ReferralCode = typeof referralCodes.$inferSelect;
+export type InsertReferralCode = typeof referralCodes.$inferInsert;
+
+// ============================================
+// Referrals (referrer-referee relationships)
+// ============================================
+
+export const referrals = pgTable("referrals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  referrerAddress: varchar("referrer_address", { length: 66 }).notNull(),
+  refereeAddress: varchar("referee_address", { length: 66 }).notNull().unique(), // Each user can only be referred once
+  referralCode: varchar("referral_code", { length: 20 }).notNull(),
+
+  status: integer("status").default(REFERRAL_STATUS.PENDING).notNull(),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  activatedAt: timestamp("activated_at"), // When referee connected wallet
+  completedAt: timestamp("completed_at"), // When first vote milestone reached
+});
+
+export type Referral = typeof referrals.$inferSelect;
+export type InsertReferral = typeof referrals.$inferInsert;
+
+// ============================================
+// Referral Milestones (tracks milestone achievements)
+// ============================================
+
+export const referralMilestones = pgTable("referral_milestones", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  referralId: varchar("referral_id", { length: 36 }).notNull(),
+  milestoneType: varchar("milestone_type", { length: 30 }).notNull(),
+
+  referrerPointsAwarded: integer("referrer_points_awarded").default(0).notNull(),
+  refereePointsAwarded: integer("referee_points_awarded").default(0).notNull(),
+
+  achievedAt: timestamp("achieved_at").defaultNow().notNull(),
+});
+
+export type ReferralMilestone = typeof referralMilestones.$inferSelect;
+export type InsertReferralMilestone = typeof referralMilestones.$inferInsert;
+
+// ============================================
+// Referral Stats (cached for leaderboard performance)
+// ============================================
+
+export const referralStats = pgTable("referral_stats", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  walletAddress: varchar("wallet_address", { length: 66 }).notNull().unique(),
+
+  totalReferrals: integer("total_referrals").default(0).notNull(),
+  activeReferrals: integer("active_referrals").default(0).notNull(), // Referees who completed first_vote
+  totalPointsEarned: integer("total_points_earned").default(0).notNull(),
+
+  currentTier: integer("current_tier").default(0).notNull(), // 0=none, 1=bronze, 2=silver, 3=gold, 4=platinum
+
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type ReferralStats = typeof referralStats.$inferSelect;
+export type InsertReferralStats = typeof referralStats.$inferInsert;

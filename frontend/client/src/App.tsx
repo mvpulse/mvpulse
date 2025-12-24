@@ -29,6 +29,7 @@ import ParticipantDashboard from "@/pages/participant/ParticipantDashboard";
 import VotingHistory from "@/pages/participant/VotingHistory";
 import Rewards from "@/pages/participant/Rewards";
 import Quests from "@/pages/participant/Quests";
+import Referrals from "@/pages/participant/Referrals";
 import Leaderboard from "@/pages/Leaderboard";
 
 // Donor pages
@@ -67,6 +68,7 @@ function App() {
             <Route path="/participant/quests" component={Quests} />
             <Route path="/participant/history" component={VotingHistory} />
             <Route path="/participant/rewards" component={Rewards} />
+            <Route path="/participant/referrals" component={Referrals} />
             <Route path="/leaderboard" component={Leaderboard} />
 
             {/* Donor routes */}
