@@ -69,7 +69,7 @@ export function useContract() {
   const executeTransaction = useCallback(
     async (
       functionName: string,
-      functionArguments: (string | number | boolean | string[])[],
+      functionArguments: (string | number | boolean | string[] | string[][])[],
       errorMessage: string,
       typeArguments: string[] = []
     ): Promise<TransactionResultWithSponsorship> => {
@@ -239,6 +239,119 @@ export function useContract() {
       }
     },
     [executeTransaction, contractAddress, getNetworkForFA]
+  );
+
+  // Create multiple polls in a single atomic transaction
+  // Returns the poll IDs from the batch event
+  const createPollsBatch = useCallback(
+    async (inputs: CreatePollInput[]): Promise<TransactionResultWithSponsorship & { pollIds: number[] }> => {
+      setLoading(true);
+      setError(null);
+
+      try {
+        if (inputs.length === 0) {
+          throw new Error("At least one poll is required for batch creation");
+        }
+
+        // All polls in a batch must use the same token type
+        const coinTypeId = (inputs[0].coinTypeId ?? COIN_TYPES.PULSE) as CoinTypeId;
+        const tokenStandard = getTokenStandard(coinTypeId);
+
+        // Validate all polls use the same token type
+        for (const input of inputs) {
+          if ((input.coinTypeId ?? COIN_TYPES.PULSE) !== coinTypeId) {
+            throw new Error("All polls in a batch must use the same token type");
+          }
+        }
+
+        // Prepare parallel arrays for the contract call
+        const titles = inputs.map(p => p.title);
+        const descriptions = inputs.map(p => p.description);
+        const optionsList = inputs.map(p => p.options);
+        const rewardPerVotes = inputs.map(p => p.rewardPerVote.toString());
+        const maxVotersList = inputs.map(p => p.maxVoters.toString());
+        const durationSecsList = inputs.map(p => p.durationSecs.toString());
+        const fundAmounts = inputs.map(p => p.fundAmount.toString());
+
+        let result: TransactionResultWithSponsorship;
+
+        if (tokenStandard === "legacy_coin") {
+          // MOVE uses legacy coin batch function
+          result = await executeTransaction(
+            "create_polls_batch_with_move",
+            [
+              contractAddress, // registry_addr
+              titles,
+              descriptions,
+              optionsList,
+              rewardPerVotes,
+              maxVotersList,
+              durationSecsList,
+              fundAmounts,
+            ],
+            "Failed to create polls batch"
+          );
+        } else {
+          // FA tokens use generic FA batch function with metadata address
+          const networkType = getNetworkForFA();
+          const faMetadataAddress = getFAMetadataAddress(coinTypeId, networkType);
+
+          if (!faMetadataAddress) {
+            throw new Error(`FA metadata address not configured for coin type ${coinTypeId}`);
+          }
+
+          result = await executeTransaction(
+            "create_polls_batch_with_fa",
+            [
+              contractAddress, // registry_addr
+              titles,
+              descriptions,
+              optionsList,
+              rewardPerVotes,
+              maxVotersList,
+              durationSecsList,
+              fundAmounts,
+              faMetadataAddress, // fa_metadata_address
+              coinTypeId.toString(), // coin_type_id
+            ],
+            "Failed to create polls batch"
+          );
+        }
+
+        // Parse poll IDs from transaction events
+        // The PollsBatchCreated event contains the poll_ids vector
+        let pollIds: number[] = [];
+        try {
+          const txResponse = await client.waitForTransaction({
+            transactionHash: result.hash,
+            options: { checkSuccess: true },
+          });
+
+          // Look for PollsBatchCreated event in the transaction
+          if ('events' in txResponse && Array.isArray(txResponse.events)) {
+            const batchEvent = txResponse.events.find(
+              (e: { type: string }) => e.type.includes("::poll::PollsBatchCreated")
+            );
+            if (batchEvent && 'data' in batchEvent && batchEvent.data) {
+              const eventData = batchEvent.data as { poll_ids?: string[] };
+              pollIds = (eventData.poll_ids || []).map((id: string) => parseInt(id, 10));
+            }
+          }
+        } catch (parseErr) {
+          console.error("Failed to parse poll IDs from event:", parseErr);
+          // Return empty array if parsing fails - caller should refetch polls
+        }
+
+        return { ...result, pollIds };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to create polls batch";
+        setError(message);
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [executeTransaction, contractAddress, getNetworkForFA, client]
   );
 
   // Fund an existing poll
@@ -939,6 +1052,7 @@ export function useContract() {
 
     // Write functions
     createPoll,
+    createPollsBatch,
     vote,
     bulkVote,
     startClaims,

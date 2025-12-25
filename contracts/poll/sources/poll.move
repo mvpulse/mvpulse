@@ -45,6 +45,8 @@ module poll::poll {
     const E_QUESTIONNAIRE_ALREADY_CLAIMED: u64 = 27;
     const E_QUESTIONNAIRE_NOT_CLAIMABLE: u64 = 28;
     const E_QUESTIONNAIRE_MAX_COMPLETERS_REACHED: u64 = 29;
+    const E_BATCH_VECTOR_LENGTH_MISMATCH: u64 = 30;
+    const E_BATCH_EMPTY: u64 = 31;
 
     /// Poll status
     const STATUS_ACTIVE: u8 = 0;
@@ -231,6 +233,17 @@ module poll::poll {
         amount: u64,
     }
 
+    #[event]
+    /// Event emitted when multiple polls are created in a batch
+    struct PollsBatchCreated has drop, store {
+        poll_ids: vector<u64>,
+        creator: address,
+        poll_count: u64,
+        total_reward_pool: u64,
+        total_platform_fee: u64,
+        coin_type_id: u8,
+    }
+
     /// Initialize the poll registry (call once when deploying)
     /// Also initializes the AptosCoin vault and generic FA vault
     public entry fun initialize(account: &signer) {
@@ -407,6 +420,219 @@ module poll::poll {
         );
     }
 
+    /// Create multiple polls in a single atomic transaction with Fungible Asset rewards
+    /// All polls are created or none (atomic). Useful for questionnaire creation.
+    /// Parameters are parallel vectors where index i represents poll i's configuration.
+    public entry fun create_polls_batch_with_fa(
+        account: &signer,
+        registry_addr: address,
+        titles: vector<String>,
+        descriptions: vector<String>,
+        options_list: vector<vector<String>>,
+        reward_per_votes: vector<u64>,
+        max_voters_list: vector<u64>,
+        duration_secs_list: vector<u64>,
+        fund_amounts: vector<u64>,
+        fa_metadata_address: address,
+        coin_type_id: u8,
+    ) acquires PollRegistry, GenericFAVault {
+        let creator = signer::address_of(account);
+        let poll_count = vector::length(&titles);
+
+        // Validate batch is not empty and all vectors have same length
+        assert!(poll_count > 0, E_BATCH_EMPTY);
+        assert!(vector::length(&descriptions) == poll_count, E_BATCH_VECTOR_LENGTH_MISMATCH);
+        assert!(vector::length(&options_list) == poll_count, E_BATCH_VECTOR_LENGTH_MISMATCH);
+        assert!(vector::length(&reward_per_votes) == poll_count, E_BATCH_VECTOR_LENGTH_MISMATCH);
+        assert!(vector::length(&max_voters_list) == poll_count, E_BATCH_VECTOR_LENGTH_MISMATCH);
+        assert!(vector::length(&duration_secs_list) == poll_count, E_BATCH_VECTOR_LENGTH_MISMATCH);
+        assert!(vector::length(&fund_amounts) == poll_count, E_BATCH_VECTOR_LENGTH_MISMATCH);
+
+        let registry = borrow_global_mut<PollRegistry>(registry_addr);
+        let fa_vault = borrow_global_mut<GenericFAVault>(registry_addr);
+
+        // Ensure the FA store is initialized
+        assert!(smart_table::contains(&fa_vault.stores, fa_metadata_address), E_FA_VAULT_NOT_INITIALIZED);
+
+        // Calculate total fund amount and total fees
+        let total_fund_amount = 0u64;
+        let i = 0;
+        while (i < poll_count) {
+            total_fund_amount = total_fund_amount + *vector::borrow(&fund_amounts, i);
+            i = i + 1;
+        };
+
+        // Calculate total fee and transfer once (more gas efficient)
+        let total_platform_fee = (total_fund_amount * registry.platform_fee_bps) / 10000;
+        let total_net_amount = total_fund_amount - total_platform_fee;
+
+        if (total_fund_amount > 0) {
+            let metadata = object::address_to_object<Metadata>(fa_metadata_address);
+
+            // Transfer total fee to treasury (single transfer)
+            if (total_platform_fee > 0) {
+                let fee_fa = primary_fungible_store::withdraw(account, metadata, total_platform_fee);
+                primary_fungible_store::deposit(registry.platform_treasury, fee_fa);
+                registry.total_fees_collected = registry.total_fees_collected + total_platform_fee;
+            };
+
+            // Transfer total net amount to FA vault (single transfer)
+            if (total_net_amount > 0) {
+                let store = smart_table::borrow(&fa_vault.stores, fa_metadata_address);
+                let payment = primary_fungible_store::withdraw(account, metadata, total_net_amount);
+                fungible_asset::deposit(*store, payment);
+            };
+        };
+
+        // Track created poll IDs for the event
+        let created_poll_ids = vector::empty<u64>();
+        let total_reward_pool = 0u64;
+
+        // Create each poll
+        i = 0;
+        while (i < poll_count) {
+            let fund_amount = *vector::borrow(&fund_amounts, i);
+            let reward_pool = if (fund_amount > 0) {
+                let fee = (fund_amount * registry.platform_fee_bps) / 10000;
+                fund_amount - fee
+            } else {
+                0
+            };
+
+            let poll_id = registry.next_id;
+            vector::push_back(&mut created_poll_ids, poll_id);
+            total_reward_pool = total_reward_pool + reward_pool;
+
+            // Create poll using internal function (fee already collected above)
+            create_poll_internal_no_event(
+                registry,
+                creator,
+                *vector::borrow(&titles, i),
+                *vector::borrow(&descriptions, i),
+                *vector::borrow(&options_list, i),
+                *vector::borrow(&reward_per_votes, i),
+                *vector::borrow(&max_voters_list, i),
+                *vector::borrow(&duration_secs_list, i),
+                reward_pool,
+                coin_type_id,
+                fa_metadata_address,
+            );
+
+            i = i + 1;
+        };
+
+        // Emit single batch event
+        event::emit(PollsBatchCreated {
+            poll_ids: created_poll_ids,
+            creator,
+            poll_count,
+            total_reward_pool,
+            total_platform_fee,
+            coin_type_id,
+        });
+    }
+
+    /// Create multiple polls in a single atomic transaction with MOVE (AptosCoin) rewards
+    public entry fun create_polls_batch_with_move(
+        account: &signer,
+        registry_addr: address,
+        titles: vector<String>,
+        descriptions: vector<String>,
+        options_list: vector<vector<String>>,
+        reward_per_votes: vector<u64>,
+        max_voters_list: vector<u64>,
+        duration_secs_list: vector<u64>,
+        fund_amounts: vector<u64>,
+    ) acquires PollRegistry, RewardVault {
+        let creator = signer::address_of(account);
+        let poll_count = vector::length(&titles);
+
+        // Validate batch is not empty and all vectors have same length
+        assert!(poll_count > 0, E_BATCH_EMPTY);
+        assert!(vector::length(&descriptions) == poll_count, E_BATCH_VECTOR_LENGTH_MISMATCH);
+        assert!(vector::length(&options_list) == poll_count, E_BATCH_VECTOR_LENGTH_MISMATCH);
+        assert!(vector::length(&reward_per_votes) == poll_count, E_BATCH_VECTOR_LENGTH_MISMATCH);
+        assert!(vector::length(&max_voters_list) == poll_count, E_BATCH_VECTOR_LENGTH_MISMATCH);
+        assert!(vector::length(&duration_secs_list) == poll_count, E_BATCH_VECTOR_LENGTH_MISMATCH);
+        assert!(vector::length(&fund_amounts) == poll_count, E_BATCH_VECTOR_LENGTH_MISMATCH);
+
+        let registry = borrow_global_mut<PollRegistry>(registry_addr);
+
+        // Calculate total fund amount
+        let total_fund_amount = 0u64;
+        let i = 0;
+        while (i < poll_count) {
+            total_fund_amount = total_fund_amount + *vector::borrow(&fund_amounts, i);
+            i = i + 1;
+        };
+
+        // Calculate total fee and transfer once
+        let total_platform_fee = (total_fund_amount * registry.platform_fee_bps) / 10000;
+        let total_net_amount = total_fund_amount - total_platform_fee;
+
+        if (total_fund_amount > 0) {
+            // Transfer total fee to treasury (single transfer)
+            if (total_platform_fee > 0) {
+                let fee_coins = coin::withdraw<AptosCoin>(account, total_platform_fee);
+                coin::deposit(registry.platform_treasury, fee_coins);
+                registry.total_fees_collected = registry.total_fees_collected + total_platform_fee;
+            };
+
+            // Transfer total net amount to vault (single transfer)
+            if (total_net_amount > 0) {
+                let vault = borrow_global_mut<RewardVault<AptosCoin>>(registry_addr);
+                let payment = coin::withdraw<AptosCoin>(account, total_net_amount);
+                coin::merge(&mut vault.coins, payment);
+            };
+        };
+
+        // Track created poll IDs for the event
+        let created_poll_ids = vector::empty<u64>();
+        let total_reward_pool = 0u64;
+
+        // Create each poll
+        i = 0;
+        while (i < poll_count) {
+            let fund_amount = *vector::borrow(&fund_amounts, i);
+            let reward_pool = if (fund_amount > 0) {
+                let fee = (fund_amount * registry.platform_fee_bps) / 10000;
+                fund_amount - fee
+            } else {
+                0
+            };
+
+            let poll_id = registry.next_id;
+            vector::push_back(&mut created_poll_ids, poll_id);
+            total_reward_pool = total_reward_pool + reward_pool;
+
+            create_poll_internal_no_event(
+                registry,
+                creator,
+                *vector::borrow(&titles, i),
+                *vector::borrow(&descriptions, i),
+                *vector::borrow(&options_list, i),
+                *vector::borrow(&reward_per_votes, i),
+                *vector::borrow(&max_voters_list, i),
+                *vector::borrow(&duration_secs_list, i),
+                reward_pool,
+                COIN_TYPE_APTOS,
+                @0x0,
+            );
+
+            i = i + 1;
+        };
+
+        // Emit single batch event
+        event::emit(PollsBatchCreated {
+            poll_ids: created_poll_ids,
+            creator,
+            poll_count,
+            total_reward_pool,
+            total_platform_fee,
+            coin_type_id: COIN_TYPE_APTOS,
+        });
+    }
+
     /// Internal function to create a poll (shared logic)
     fun create_poll_internal(
         registry: &mut PollRegistry,
@@ -466,6 +692,58 @@ module poll::poll {
             platform_fee,
             coin_type_id,
         });
+    }
+
+    /// Internal function to create a poll without emitting individual event
+    /// Used for batch creation where we emit a single batch event instead
+    fun create_poll_internal_no_event(
+        registry: &mut PollRegistry,
+        creator: address,
+        title: String,
+        description: String,
+        options: vector<String>,
+        reward_per_vote: u64,
+        max_voters: u64,
+        duration_secs: u64,
+        reward_pool: u64,
+        coin_type_id: u8,
+        fa_metadata_address: address,
+    ) {
+        let poll_id = registry.next_id;
+        let num_options = vector::length(&options);
+        let votes = vector::empty<u64>();
+
+        // Initialize vote counts to 0
+        let i = 0;
+        while (i < num_options) {
+            vector::push_back(&mut votes, 0);
+            i = i + 1;
+        };
+
+        let poll = Poll {
+            id: poll_id,
+            creator,
+            title,
+            description,
+            options,
+            votes,
+            voters: vector::empty(),
+            reward_per_vote,
+            reward_pool,
+            max_voters,
+            distribution_mode: DISTRIBUTION_UNSET,
+            claimed: vector::empty(),
+            rewards_distributed: false,
+            end_time: timestamp::now_seconds() + duration_secs,
+            status: STATUS_ACTIVE,
+            coin_type_id,
+            closed_at: 0,
+            fa_metadata_address,
+        };
+
+        vector::push_back(&mut registry.polls, poll);
+        registry.next_id = poll_id + 1;
+        // Note: No event emitted - caller should emit PollsBatchCreated instead
     }
 
     /// Add MOVE funds to an existing poll (only creator can add funds)

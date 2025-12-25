@@ -30,6 +30,7 @@ import {
   AlertCircle,
   Loader2,
   Wallet,
+  Info,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useContract } from "@/hooks/useContract";
@@ -42,7 +43,16 @@ import {
 import { COIN_TYPES, getCoinSymbol, getFAMetadataAddress, CoinTypeId } from "@/lib/tokens";
 import { formatBalance, parseToSmallestUnit } from "@/lib/balance";
 import { useNetwork } from "@/contexts/NetworkContext";
-import type { PollWithMeta } from "@/types/poll";
+import type { PollWithMeta, CreatePollInput } from "@/types/poll";
+import { type PollFormData, DURATION_OPTIONS } from "@/components/poll";
+import {
+  CreationMethodSelector,
+  useCreationMethodPreference,
+  type CreationMethod,
+  PollCreationModal,
+  InlinePollCreator,
+  TabbedPollSelector,
+} from "@/components/questionnaire";
 
 const STEPS = [
   { id: 1, title: "Basic Info", description: "Title and description" },
@@ -70,6 +80,7 @@ export default function CreateQuestionnaire() {
     activeAddress,
     getAllPolls,
     createQuestionnairePool,
+    createPollsBatch,
     loading: contractLoading,
   } = useContract();
 
@@ -98,6 +109,11 @@ export default function CreateQuestionnaire() {
   const [loadingPolls, setLoadingPolls] = useState(true);
   const [selectedPollIds, setSelectedPollIds] = useState<number[]>([]);
   const [pollSearchTerm, setPollSearchTerm] = useState("");
+
+  // Poll creation within questionnaire
+  const [creationMethod, setCreationMethod] = useCreationMethodPreference();
+  const [pendingNewPolls, setPendingNewPolls] = useState<PollFormData[]>([]);
+  const [isPollCreationModalOpen, setIsPollCreationModalOpen] = useState(false);
 
   // Step 3: Rewards
   const [rewardType, setRewardType] = useState<"per_poll" | "shared_pool">("per_poll");
@@ -176,9 +192,26 @@ export default function CreateQuestionnaire() {
     });
   };
 
+  // Handler for new poll creation
+  const handlePollCreated = (data: PollFormData) => {
+    setPendingNewPolls((prev) => [...prev, data]);
+    toast({
+      title: "Poll Added",
+      description: `"${data.title}" will be created when you submit the questionnaire.`,
+    });
+  };
+
+  // Remove a pending poll
+  const removePendingPoll = (index: number) => {
+    setPendingNewPolls((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // Total polls count (existing selected + pending new)
+  const totalPollsCount = selectedPollIds.length + pendingNewPolls.length;
+
   // Validation for each step
   const isStep1Valid = title.trim().length > 0 && startDate && endDate;
-  const isStep2Valid = selectedPollIds.length >= 2;
+  const isStep2Valid = totalPollsCount >= 2;
   const isStep3Valid =
     rewardType === "per_poll" ||
     (rewardType === "shared_pool" && totalRewardAmount && parseFloat(totalRewardAmount) > 0);
@@ -230,6 +263,42 @@ export default function CreateQuestionnaire() {
     setIsCreating(true);
 
     try {
+      // Step 0: Create any pending new polls via batch transaction
+      let allPollIds = [...selectedPollIds];
+
+      if (pendingNewPolls.length > 0) {
+        toast({
+          title: "Creating Polls",
+          description: `Creating ${pendingNewPolls.length} new poll(s)...`,
+        });
+
+        // Convert PollFormData to CreatePollInput
+        const pollInputs: CreatePollInput[] = pendingNewPolls.map((poll) => ({
+          title: poll.title,
+          description: poll.description,
+          options: poll.options,
+          rewardPerVote: poll.rewardPerVote,
+          maxVoters: poll.maxVoters,
+          durationSecs: DURATION_OPTIONS[poll.duration],
+          fundAmount: poll.fundAmount,
+          coinTypeId: poll.selectedToken,
+        }));
+
+        const batchResult = await createPollsBatch(pollInputs);
+
+        if (!batchResult.success) {
+          throw new Error("Failed to create polls");
+        }
+
+        // Add newly created poll IDs to the list
+        allPollIds = [...allPollIds, ...batchResult.pollIds];
+
+        toast({
+          title: "Polls Created",
+          description: `Successfully created ${batchResult.pollIds.length} new poll(s).`,
+        });
+      }
+
       // Step 1: Create questionnaire in database
       const questionnaire = await createQuestionnaireMutation.mutateAsync({
         creatorAddress: activeAddress,
@@ -252,7 +321,7 @@ export default function CreateQuestionnaire() {
             ? parseToSmallestUnit(parseFloat(fixedRewardAmount), coinTypeId === COIN_TYPES.USDC ? 6 : 8).toString()
             : "0",
         maxCompleters: maxCompleters ? parseInt(maxCompleters) : undefined,
-        pollIds: selectedPollIds,
+        pollIds: allPollIds,
       });
 
       // Step 2: If shared pool, create on-chain pool
@@ -475,135 +544,433 @@ export default function CreateQuestionnaire() {
           {/* Step 2: Select Polls */}
           {currentStep === 2 && (
             <div className="space-y-6">
-              <div>
-                <Label>Search Polls</Label>
-                <div className="relative mt-1">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    value={pollSearchTerm}
-                    onChange={(e) => setPollSearchTerm(e.target.value)}
-                    placeholder="Search by title or description..."
-                    className="pl-9"
+              {/* Creation Method Selector */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="font-medium">Add Polls</h4>
+                  <p className="text-sm text-muted-foreground">
+                    Select existing polls or create new ones
+                  </p>
+                </div>
+                <CreationMethodSelector
+                  value={creationMethod}
+                  onChange={setCreationMethod}
+                />
+              </div>
+
+              {/* Info note about poll creation */}
+              {rewardType === "shared_pool" && (
+                <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-start gap-2">
+                  <Info className="w-4 h-4 mt-0.5 text-blue-500 shrink-0" />
+                  <p className="text-sm text-blue-700 dark:text-blue-300">
+                    Since you're using shared pool rewards, any new polls you create here won't have their own incentives.
+                    Participants will be rewarded from the questionnaire's shared pool instead.
+                  </p>
+                </div>
+              )}
+
+              {/* Tab-based UI */}
+              {creationMethod === "tab" && (
+                <TabbedPollSelector
+                  availablePolls={filteredPolls}
+                  selectedPollIds={selectedPollIds}
+                  onSelectionChange={setSelectedPollIds}
+                  onPollCreated={handlePollCreated}
+                  isLoading={loadingPolls}
+                  showIncentives={rewardType !== "shared_pool"}
+                  defaultTab={availablePolls.length === 0 ? "create" : "existing"}
+                  pendingNewPollsCount={pendingNewPolls.length}
+                />
+              )}
+
+              {/* Modal-based UI */}
+              {creationMethod === "modal" && (
+                <>
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <Label>Search Polls</Label>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setIsPollCreationModalOpen(true)}
+                        className="gap-1"
+                      >
+                        <Plus className="h-4 w-4" />
+                        Create New Poll
+                      </Button>
+                    </div>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        value={pollSearchTerm}
+                        onChange={(e) => setPollSearchTerm(e.target.value)}
+                        placeholder="Search by title or description..."
+                        className="pl-9"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-6">
+                    {/* Available Polls */}
+                    <div>
+                      <h4 className="font-medium mb-3">Available Polls</h4>
+                      <div className="border rounded-lg h-[350px] overflow-y-auto">
+                        {loadingPolls ? (
+                          <div className="p-4 space-y-3">
+                            {[...Array(4)].map((_, i) => (
+                              <Skeleton key={i} className="h-16 w-full" />
+                            ))}
+                          </div>
+                        ) : filteredPolls.length === 0 ? (
+                          <div className="p-4 text-center text-muted-foreground">
+                            <p>No active polls found</p>
+                            <Button
+                              variant="link"
+                              size="sm"
+                              onClick={() => setIsPollCreationModalOpen(true)}
+                              className="mt-2"
+                            >
+                              Create your first poll
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="p-2 space-y-2">
+                            {filteredPolls.map((poll) => (
+                              <div
+                                key={poll.id}
+                                className={`p-3 border rounded-lg cursor-pointer transition-colors ${
+                                  selectedPollIds.includes(poll.id)
+                                    ? "border-primary bg-primary/5"
+                                    : "hover:bg-muted/50"
+                                }`}
+                                onClick={() => togglePollSelection(poll.id)}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="flex-1 min-w-0">
+                                    <p className="font-medium text-sm truncate">
+                                      {poll.title}
+                                    </p>
+                                    <p className="text-xs text-muted-foreground truncate">
+                                      {poll.totalVotes} votes
+                                    </p>
+                                  </div>
+                                  <Checkbox
+                                    checked={selectedPollIds.includes(poll.id)}
+                                    className="mt-0.5"
+                                  />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Selected Polls */}
+                    <div>
+                      <h4 className="font-medium mb-3">
+                        Selected Polls ({totalPollsCount})
+                      </h4>
+                      <div className="border rounded-lg h-[350px] overflow-y-auto">
+                        {totalPollsCount === 0 ? (
+                          <div className="p-4 text-center text-muted-foreground">
+                            Select at least 2 polls
+                          </div>
+                        ) : (
+                          <div className="p-2 space-y-2">
+                            {/* Existing selected polls */}
+                            {selectedPolls.map((poll, index) => (
+                              <div
+                                key={poll.id}
+                                className="p-3 border rounded-lg bg-muted/30"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <GripVertical className="h-4 w-4 text-muted-foreground" />
+                                  <span className="text-sm font-medium text-muted-foreground w-6">
+                                    {index + 1}.
+                                  </span>
+                                  <div className="flex-1 min-w-0">
+                                    <p className="font-medium text-sm truncate">
+                                      {poll.title}
+                                    </p>
+                                  </div>
+                                  <div className="flex gap-1">
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => movePollUp(index)}
+                                      disabled={index === 0}
+                                      className="h-7 w-7 p-0"
+                                    >
+                                      <ArrowLeft className="h-3 w-3 rotate-90" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => movePollDown(index)}
+                                      disabled={index === selectedPollIds.length - 1}
+                                      className="h-7 w-7 p-0"
+                                    >
+                                      <ArrowRight className="h-3 w-3 rotate-90" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => togglePollSelection(poll.id)}
+                                      className="h-7 w-7 p-0 text-destructive"
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                    </Button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                            {/* Pending new polls */}
+                            {pendingNewPolls.map((poll, index) => (
+                              <div
+                                key={`pending-${index}`}
+                                className="p-3 border rounded-lg bg-primary/5 border-primary/30"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <Badge variant="secondary" className="text-[10px] shrink-0">
+                                    NEW
+                                  </Badge>
+                                  <span className="text-sm font-medium text-muted-foreground w-6">
+                                    {selectedPollIds.length + index + 1}.
+                                  </span>
+                                  <div className="flex-1 min-w-0">
+                                    <p className="font-medium text-sm truncate">
+                                      {poll.title}
+                                    </p>
+                                  </div>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => removePendingPoll(index)}
+                                    className="h-7 w-7 p-0 text-destructive"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <PollCreationModal
+                    open={isPollCreationModalOpen}
+                    onOpenChange={setIsPollCreationModalOpen}
+                    onPollCreated={handlePollCreated}
+                    showIncentives={rewardType !== "shared_pool"}
                   />
-                </div>
-              </div>
+                </>
+              )}
 
-              <div className="grid grid-cols-2 gap-6">
-                {/* Available Polls */}
-                <div>
-                  <h4 className="font-medium mb-3">Available Polls</h4>
-                  <div className="border rounded-lg h-[400px] overflow-y-auto">
-                    {loadingPolls ? (
-                      <div className="p-4 space-y-3">
-                        {[...Array(4)].map((_, i) => (
-                          <Skeleton key={i} className="h-16 w-full" />
-                        ))}
-                      </div>
-                    ) : filteredPolls.length === 0 ? (
-                      <div className="p-4 text-center text-muted-foreground">
-                        No active polls found
-                      </div>
-                    ) : (
-                      <div className="p-2 space-y-2">
-                        {filteredPolls.map((poll) => (
-                          <div
-                            key={poll.id}
-                            className={`p-3 border rounded-lg cursor-pointer transition-colors ${
-                              selectedPollIds.includes(poll.id)
-                                ? "border-primary bg-primary/5"
-                                : "hover:bg-muted/50"
-                            }`}
-                            onClick={() => togglePollSelection(poll.id)}
-                          >
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="flex-1 min-w-0">
-                                <p className="font-medium text-sm truncate">
-                                  {poll.title}
-                                </p>
-                                <p className="text-xs text-muted-foreground truncate">
-                                  {poll.totalVotes} votes
-                                </p>
-                              </div>
-                              <Checkbox
-                                checked={selectedPollIds.includes(poll.id)}
-                                className="mt-0.5"
-                              />
-                            </div>
+              {/* Inline-based UI */}
+              {creationMethod === "inline" && (
+                <>
+                  <div>
+                    <Label>Search Polls</Label>
+                    <div className="relative mt-1">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        value={pollSearchTerm}
+                        onChange={(e) => setPollSearchTerm(e.target.value)}
+                        placeholder="Search by title or description..."
+                        className="pl-9"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-6">
+                    {/* Available Polls + Inline Creator */}
+                    <div className="space-y-4">
+                      <h4 className="font-medium">Available Polls</h4>
+                      <div className="border rounded-lg h-[300px] overflow-y-auto">
+                        {loadingPolls ? (
+                          <div className="p-4 space-y-3">
+                            {[...Array(3)].map((_, i) => (
+                              <Skeleton key={i} className="h-16 w-full" />
+                            ))}
                           </div>
-                        ))}
+                        ) : filteredPolls.length === 0 ? (
+                          <div className="p-4 text-center text-muted-foreground">
+                            No active polls found
+                          </div>
+                        ) : (
+                          <div className="p-2 space-y-2">
+                            {filteredPolls.map((poll) => (
+                              <div
+                                key={poll.id}
+                                className={`p-3 border rounded-lg cursor-pointer transition-colors ${
+                                  selectedPollIds.includes(poll.id)
+                                    ? "border-primary bg-primary/5"
+                                    : "hover:bg-muted/50"
+                                }`}
+                                onClick={() => togglePollSelection(poll.id)}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="flex-1 min-w-0">
+                                    <p className="font-medium text-sm truncate">
+                                      {poll.title}
+                                    </p>
+                                    <p className="text-xs text-muted-foreground truncate">
+                                      {poll.totalVotes} votes
+                                    </p>
+                                  </div>
+                                  <Checkbox
+                                    checked={selectedPollIds.includes(poll.id)}
+                                    className="mt-0.5"
+                                  />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    )}
+
+                      {/* Inline poll creator */}
+                      <InlinePollCreator
+                        onPollCreated={handlePollCreated}
+                        showIncentives={rewardType !== "shared_pool"}
+                        defaultOpen={availablePolls.length === 0}
+                      />
+                    </div>
+
+                    {/* Selected Polls */}
+                    <div>
+                      <h4 className="font-medium mb-3">
+                        Selected Polls ({totalPollsCount})
+                      </h4>
+                      <div className="border rounded-lg h-[400px] overflow-y-auto">
+                        {totalPollsCount === 0 ? (
+                          <div className="p-4 text-center text-muted-foreground">
+                            Select at least 2 polls
+                          </div>
+                        ) : (
+                          <div className="p-2 space-y-2">
+                            {/* Existing selected polls */}
+                            {selectedPolls.map((poll, index) => (
+                              <div
+                                key={poll.id}
+                                className="p-3 border rounded-lg bg-muted/30"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <GripVertical className="h-4 w-4 text-muted-foreground" />
+                                  <span className="text-sm font-medium text-muted-foreground w-6">
+                                    {index + 1}.
+                                  </span>
+                                  <div className="flex-1 min-w-0">
+                                    <p className="font-medium text-sm truncate">
+                                      {poll.title}
+                                    </p>
+                                  </div>
+                                  <div className="flex gap-1">
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => movePollUp(index)}
+                                      disabled={index === 0}
+                                      className="h-7 w-7 p-0"
+                                    >
+                                      <ArrowLeft className="h-3 w-3 rotate-90" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => movePollDown(index)}
+                                      disabled={index === selectedPollIds.length - 1}
+                                      className="h-7 w-7 p-0"
+                                    >
+                                      <ArrowRight className="h-3 w-3 rotate-90" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => togglePollSelection(poll.id)}
+                                      className="h-7 w-7 p-0 text-destructive"
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                    </Button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                            {/* Pending new polls */}
+                            {pendingNewPolls.map((poll, index) => (
+                              <div
+                                key={`pending-${index}`}
+                                className="p-3 border rounded-lg bg-primary/5 border-primary/30"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <Badge variant="secondary" className="text-[10px] shrink-0">
+                                    NEW
+                                  </Badge>
+                                  <span className="text-sm font-medium text-muted-foreground w-6">
+                                    {selectedPollIds.length + index + 1}.
+                                  </span>
+                                  <div className="flex-1 min-w-0">
+                                    <p className="font-medium text-sm truncate">
+                                      {poll.title}
+                                    </p>
+                                  </div>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => removePendingPoll(index)}
+                                    className="h-7 w-7 p-0 text-destructive"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Pending polls summary (only for tab mode) */}
+              {creationMethod === "tab" && pendingNewPolls.length > 0 && (
+                <div className="p-4 border rounded-lg bg-muted/30">
+                  <h4 className="font-medium mb-2">Pending New Polls ({pendingNewPolls.length})</h4>
+                  <div className="space-y-2">
+                    {pendingNewPolls.map((poll, index) => (
+                      <div
+                        key={`pending-${index}`}
+                        className="flex items-center justify-between p-2 bg-background rounded border"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Badge variant="secondary" className="text-[10px]">NEW</Badge>
+                          <span className="text-sm font-medium">{poll.title}</span>
+                          <span className="text-xs text-muted-foreground">
+                            ({poll.options.length} options)
+                          </span>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removePendingPoll(index)}
+                          className="h-7 w-7 p-0 text-destructive"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ))}
                   </div>
                 </div>
+              )}
 
-                {/* Selected Polls */}
-                <div>
-                  <h4 className="font-medium mb-3">
-                    Selected Polls ({selectedPollIds.length})
-                  </h4>
-                  <div className="border rounded-lg h-[400px] overflow-y-auto">
-                    {selectedPollIds.length === 0 ? (
-                      <div className="p-4 text-center text-muted-foreground">
-                        Select at least 2 polls
-                      </div>
-                    ) : (
-                      <div className="p-2 space-y-2">
-                        {selectedPolls.map((poll, index) => (
-                          <div
-                            key={poll.id}
-                            className="p-3 border rounded-lg bg-muted/30"
-                          >
-                            <div className="flex items-center gap-2">
-                              <GripVertical className="h-4 w-4 text-muted-foreground" />
-                              <span className="text-sm font-medium text-muted-foreground w-6">
-                                {index + 1}.
-                              </span>
-                              <div className="flex-1 min-w-0">
-                                <p className="font-medium text-sm truncate">
-                                  {poll.title}
-                                </p>
-                              </div>
-                              <div className="flex gap-1">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => movePollUp(index)}
-                                  disabled={index === 0}
-                                  className="h-7 w-7 p-0"
-                                >
-                                  <ArrowLeft className="h-3 w-3 rotate-90" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => movePollDown(index)}
-                                  disabled={index === selectedPollIds.length - 1}
-                                  className="h-7 w-7 p-0"
-                                >
-                                  <ArrowRight className="h-3 w-3 rotate-90" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => togglePollSelection(poll.id)}
-                                  className="h-7 w-7 p-0 text-destructive"
-                                >
-                                  <Trash2 className="h-3 w-3" />
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {selectedPollIds.length > 0 && selectedPollIds.length < 2 && (
+              {totalPollsCount > 0 && totalPollsCount < 2 && (
                 <div className="flex items-center gap-2 text-amber-600 text-sm">
                   <AlertCircle className="h-4 w-4" />
-                  <span>Select at least 2 polls for a questionnaire</span>
+                  <span>Add at least 2 polls for a questionnaire</span>
                 </div>
               )}
             </div>
@@ -815,13 +1182,19 @@ export default function CreateQuestionnaire() {
               <div className="space-y-4">
                 <div className="flex justify-between items-center pb-3 border-b">
                   <h4 className="font-medium">
-                    Polls ({selectedPollIds.length})
+                    Polls ({totalPollsCount})
+                    {pendingNewPolls.length > 0 && (
+                      <span className="text-xs text-muted-foreground ml-2">
+                        ({selectedPollIds.length} existing + {pendingNewPolls.length} new)
+                      </span>
+                    )}
                   </h4>
                   <Button variant="ghost" size="sm" onClick={() => setCurrentStep(2)}>
                     Edit
                   </Button>
                 </div>
                 <div className="space-y-2">
+                  {/* Existing polls */}
                   {selectedPolls.map((poll, index) => (
                     <div
                       key={poll.id}
@@ -830,6 +1203,18 @@ export default function CreateQuestionnaire() {
                       <span className="text-muted-foreground w-6">{index + 1}.</span>
                       <span className="flex-1 truncate">{poll.title}</span>
                       <Badge variant="secondary">{poll.totalVotes} votes</Badge>
+                    </div>
+                  ))}
+                  {/* Pending new polls */}
+                  {pendingNewPolls.map((poll, index) => (
+                    <div
+                      key={`pending-${index}`}
+                      className="flex items-center gap-2 text-sm p-2 bg-primary/5 rounded border border-primary/20"
+                    >
+                      <span className="text-muted-foreground w-6">{selectedPollIds.length + index + 1}.</span>
+                      <Badge variant="secondary" className="text-[10px] shrink-0">NEW</Badge>
+                      <span className="flex-1 truncate">{poll.title}</span>
+                      <span className="text-xs text-muted-foreground">{poll.options.length} options</span>
                     </div>
                   ))}
                 </div>
