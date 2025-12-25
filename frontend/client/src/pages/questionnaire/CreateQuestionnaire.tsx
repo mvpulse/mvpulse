@@ -367,7 +367,7 @@ export default function CreateQuestionnaire() {
         const maxCompletersNum = maxCompleters ? parseInt(maxCompleters) : 0;
 
         const poolResult = await createQuestionnairePool(
-          selectedPollIds,
+          allPollIds,
           rewardPerCompletionAmount,
           maxCompletersNum,
           getDurationSecs(),

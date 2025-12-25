@@ -466,7 +466,7 @@ function PollVotingCard({
           // Show options for selection
           <>
             <RadioGroup
-              value={selectedOption?.toString()}
+              value={selectedOption !== undefined ? selectedOption.toString() : ""}
               onValueChange={(value) => onSelectOption(parseInt(value))}
               disabled={disabled}
             >
