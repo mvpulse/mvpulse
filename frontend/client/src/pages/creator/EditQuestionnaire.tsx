@@ -3,7 +3,7 @@
  * Only DRAFT questionnaires can be edited. Published questionnaires are read-only.
  */
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRoute, Link, useLocation } from "wouter";
 import { CreatorLayout } from "@/components/layouts/CreatorLayout";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -36,9 +36,11 @@ import {
   useQuestionnaire,
   useUpdateQuestionnaire,
   useRemovePollFromQuestionnaire,
+  useReorderQuestionnairePolls,
   QUESTIONNAIRE_STATUS,
   getQuestionnaireStatusLabel,
   getQuestionnaireStatusColor,
+  type QuestionnairePoll,
 } from "@/hooks/useQuestionnaire";
 import { useContract } from "@/hooks/useContract";
 import { DurationInput } from "@/components/ui/duration-input";
@@ -74,6 +76,7 @@ export default function EditQuestionnaire() {
   // Mutations
   const updateMutation = useUpdateQuestionnaire();
   const removePollMutation = useRemovePollFromQuestionnaire();
+  const reorderMutation = useReorderQuestionnairePolls();
 
   // Form state
   const [title, setTitle] = useState("");
@@ -83,6 +86,10 @@ export default function EditQuestionnaire() {
 
   // Duration state
   const durationInput = useDurationInput("custom");
+
+  // Local polls state for drag-and-drop reordering
+  const [localPolls, setLocalPolls] = useState<QuestionnairePoll[]>([]);
+  const [draggedPollId, setDraggedPollId] = useState<number | null>(null);
 
   // Initialize form when questionnaire loads
   useEffect(() => {
@@ -101,6 +108,11 @@ export default function EditQuestionnaire() {
         durationInput.setEndDate(
           new Date(questionnaire.endTime).toISOString().slice(0, 16)
         );
+      }
+
+      // Initialize local polls sorted by sortOrder
+      if (questionnaire.polls) {
+        setLocalPolls([...questionnaire.polls].sort((a, b) => a.sortOrder - b.sortOrder));
       }
     }
   }, [questionnaire]);
@@ -181,6 +193,74 @@ export default function EditQuestionnaire() {
       });
     }
   };
+
+  // Drag and drop handlers
+  const handleDragStart = useCallback((e: React.DragEvent, pollId: number) => {
+    setDraggedPollId(pollId);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", pollId.toString());
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }, []);
+
+  const handleDragEnter = useCallback((e: React.DragEvent, targetPollId: number) => {
+    e.preventDefault();
+    if (draggedPollId === null || draggedPollId === targetPollId) return;
+
+    setLocalPolls((prevPolls) => {
+      const draggedIndex = prevPolls.findIndex((p) => p.pollId === draggedPollId);
+      const targetIndex = prevPolls.findIndex((p) => p.pollId === targetPollId);
+
+      if (draggedIndex === -1 || targetIndex === -1) return prevPolls;
+
+      const newPolls = [...prevPolls];
+      const [draggedPoll] = newPolls.splice(draggedIndex, 1);
+      newPolls.splice(targetIndex, 0, draggedPoll);
+
+      return newPolls;
+    });
+  }, [draggedPollId]);
+
+  const handleDragEnd = useCallback(async () => {
+    if (draggedPollId === null || !questionnaireId) {
+      setDraggedPollId(null);
+      return;
+    }
+
+    // Save the new order to backend
+    const pollOrder = localPolls.map((poll, index) => ({
+      pollId: poll.pollId,
+      sortOrder: index,
+    }));
+
+    try {
+      await reorderMutation.mutateAsync({
+        questionnaireId,
+        pollOrder,
+      });
+
+      toast({
+        title: "Order Updated",
+        description: "Poll order has been saved.",
+      });
+    } catch (err) {
+      console.error("Failed to reorder polls:", err);
+      toast({
+        title: "Reorder Failed",
+        description: err instanceof Error ? err.message : "Failed to save poll order",
+        variant: "destructive",
+      });
+      // Revert to original order on failure
+      if (questionnaire?.polls) {
+        setLocalPolls([...questionnaire.polls].sort((a, b) => a.sortOrder - b.sortOrder));
+      }
+    }
+
+    setDraggedPollId(null);
+  }, [draggedPollId, questionnaireId, localPolls, reorderMutation, toast, questionnaire]);
 
   // Loading state
   if (isLoading) {
@@ -410,9 +490,9 @@ export default function EditQuestionnaire() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <div>
-                <CardTitle>Polls ({questionnaire.polls?.length || 0})</CardTitle>
+                <CardTitle>Polls ({localPolls.length})</CardTitle>
                 <CardDescription>
-                  Manage the polls in this questionnaire
+                  Drag to reorder polls. Changes are saved automatically.
                 </CardDescription>
               </div>
               <Link href={`/questionnaire/create?addTo=${questionnaire.id}`}>
@@ -424,7 +504,7 @@ export default function EditQuestionnaire() {
             </div>
           </CardHeader>
           <CardContent>
-            {!questionnaire.polls || questionnaire.polls.length === 0 ? (
+            {localPolls.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
                 <p>No polls added yet.</p>
                 <p className="text-sm mt-1">
@@ -433,33 +513,46 @@ export default function EditQuestionnaire() {
               </div>
             ) : (
               <div className="space-y-2">
-                {questionnaire.polls
-                  .sort((a, b) => a.sortOrder - b.sortOrder)
-                  .map((poll, index) => (
-                    <div
-                      key={poll.id}
-                      className="flex items-center gap-3 p-3 border rounded-lg bg-muted/30"
-                    >
-                      <GripVertical className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-muted-foreground w-6">
-                        {index + 1}.
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium truncate">
-                          Poll #{poll.pollId}
-                        </p>
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleRemovePoll(poll.pollId)}
-                        disabled={removePollMutation.isPending}
-                        className="text-destructive hover:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                {localPolls.map((poll, index) => (
+                  <div
+                    key={poll.id}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, poll.pollId)}
+                    onDragOver={handleDragOver}
+                    onDragEnter={(e) => handleDragEnter(e, poll.pollId)}
+                    onDragEnd={handleDragEnd}
+                    className={`flex items-center gap-3 p-3 border rounded-lg transition-all ${
+                      draggedPollId === poll.pollId
+                        ? "opacity-50 border-primary bg-primary/10"
+                        : "bg-muted/30 hover:bg-muted/50"
+                    }`}
+                  >
+                    <GripVertical className="h-4 w-4 text-muted-foreground cursor-grab active:cursor-grabbing" />
+                    <span className="text-muted-foreground w-6">
+                      {index + 1}.
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">
+                        Poll #{poll.pollId}
+                      </p>
                     </div>
-                  ))}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleRemovePoll(poll.pollId)}
+                      disabled={removePollMutation.isPending || reorderMutation.isPending}
+                      className="text-destructive hover:text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+                {reorderMutation.isPending && (
+                  <div className="flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Saving order...
+                  </div>
+                )}
               </div>
             )}
           </CardContent>
