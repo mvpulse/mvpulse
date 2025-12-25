@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
+import { DurationInput } from "@/components/ui/duration-input";
 import {
   ArrowLeft,
   ArrowRight,
@@ -34,6 +35,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useContract } from "@/hooks/useContract";
+import { useDurationInput } from "@/hooks/useDurationInput";
 import {
   useCreateQuestionnaire,
   useUpdateQuestionnaire,
@@ -44,7 +46,7 @@ import { COIN_TYPES, getCoinSymbol, getFAMetadataAddress, CoinTypeId } from "@/l
 import { formatBalance, parseToSmallestUnit } from "@/lib/balance";
 import { useNetwork } from "@/contexts/NetworkContext";
 import type { PollWithMeta, CreatePollInput } from "@/types/poll";
-import { type PollFormData, DURATION_OPTIONS } from "@/components/poll";
+import { type PollFormData } from "@/components/poll";
 import {
   CreationMethodSelector,
   useCreationMethodPreference,
@@ -94,15 +96,9 @@ export default function CreateQuestionnaire() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState<string>("");
-  const [startDate, setStartDate] = useState(() => {
-    const now = new Date();
-    return now.toISOString().slice(0, 16);
-  });
-  const [endDate, setEndDate] = useState(() => {
-    const now = new Date();
-    now.setDate(now.getDate() + 7);
-    return now.toISOString().slice(0, 16);
-  });
+
+  // Duration state with unified input (default to custom for questionnaires)
+  const durationInput = useDurationInput("custom");
 
   // Step 2: Poll Selection
   const [availablePolls, setAvailablePolls] = useState<PollWithMeta[]>([]);
@@ -210,7 +206,7 @@ export default function CreateQuestionnaire() {
   const totalPollsCount = selectedPollIds.length + pendingNewPolls.length;
 
   // Validation for each step
-  const isStep1Valid = title.trim().length > 0 && startDate && endDate;
+  const isStep1Valid = title.trim().length > 0 && durationInput.durationSecs > 0;
   const isStep2Valid = totalPollsCount >= 2;
   const isStep3Valid =
     rewardType === "per_poll" ||
@@ -242,12 +238,8 @@ export default function CreateQuestionnaire() {
     }
   };
 
-  // Calculate duration in seconds
-  const getDurationSecs = () => {
-    const start = new Date(startDate).getTime();
-    const end = new Date(endDate).getTime();
-    return Math.floor((end - start) / 1000);
-  };
+  // Calculate duration in seconds (now from hook)
+  const getDurationSecs = () => durationInput.durationSecs;
 
   // Create questionnaire
   const handleCreate = async () => {
@@ -279,7 +271,7 @@ export default function CreateQuestionnaire() {
           options: poll.options,
           rewardPerVote: poll.rewardPerVote,
           maxVoters: poll.maxVoters,
-          durationSecs: DURATION_OPTIONS[poll.duration],
+          durationSecs: poll.durationSecs,
           fundAmount: poll.fundAmount,
           coinTypeId: poll.selectedToken,
         }));
@@ -305,8 +297,8 @@ export default function CreateQuestionnaire() {
         title,
         description,
         category: category || undefined,
-        startTime: new Date(startDate).toISOString(),
-        endTime: new Date(endDate).toISOString(),
+        startTime: new Date(durationInput.startDate).toISOString(),
+        endTime: new Date(durationInput.endDate).toISOString(),
         rewardType:
           rewardType === "per_poll"
             ? QUESTIONNAIRE_REWARD_TYPE.PER_POLL
@@ -516,28 +508,17 @@ export default function CreateQuestionnaire() {
                 </Select>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="startDate">Start Date *</Label>
-                  <Input
-                    id="startDate"
-                    type="datetime-local"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                    className="mt-1"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="endDate">End Date *</Label>
-                  <Input
-                    id="endDate"
-                    type="datetime-local"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                    className="mt-1"
-                  />
-                </div>
-              </div>
+              <DurationInput
+                mode={durationInput.mode}
+                onModeChange={durationInput.setMode}
+                fixedDuration={durationInput.fixedDuration}
+                onFixedDurationChange={durationInput.setFixedDuration}
+                startDate={durationInput.startDate}
+                endDate={durationInput.endDate}
+                onStartDateChange={durationInput.setStartDate}
+                onEndDateChange={durationInput.setEndDate}
+                label="Duration *"
+              />
             </div>
           )}
 
@@ -559,15 +540,12 @@ export default function CreateQuestionnaire() {
               </div>
 
               {/* Info note about poll creation */}
-              {rewardType === "shared_pool" && (
-                <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-start gap-2">
-                  <Info className="w-4 h-4 mt-0.5 text-blue-500 shrink-0" />
-                  <p className="text-sm text-blue-700 dark:text-blue-300">
-                    Since you're using shared pool rewards, any new polls you create here won't have their own incentives.
-                    Participants will be rewarded from the questionnaire's shared pool instead.
-                  </p>
-                </div>
-              )}
+              <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-start gap-2">
+                <Info className="w-4 h-4 mt-0.5 text-blue-500 shrink-0" />
+                <p className="text-sm text-blue-700 dark:text-blue-300">
+                  Polls created here inherit the questionnaire's category and duration. Rewards are managed at the questionnaire level.
+                </p>
+              </div>
 
               {/* Tab-based UI */}
               {creationMethod === "tab" && (
@@ -577,9 +555,11 @@ export default function CreateQuestionnaire() {
                   onSelectionChange={setSelectedPollIds}
                   onPollCreated={handlePollCreated}
                   isLoading={loadingPolls}
-                  showIncentives={rewardType !== "shared_pool"}
+                  showIncentives={false}
                   defaultTab={availablePolls.length === 0 ? "create" : "existing"}
                   pendingNewPollsCount={pendingNewPolls.length}
+                  inheritedCategory={category}
+                  inheritedDurationSecs={durationInput.durationSecs}
                 />
               )}
 
@@ -764,7 +744,9 @@ export default function CreateQuestionnaire() {
                     open={isPollCreationModalOpen}
                     onOpenChange={setIsPollCreationModalOpen}
                     onPollCreated={handlePollCreated}
-                    showIncentives={rewardType !== "shared_pool"}
+                    showIncentives={false}
+                    inheritedCategory={category}
+                    inheritedDurationSecs={durationInput.durationSecs}
                   />
                 </>
               )}
@@ -835,8 +817,10 @@ export default function CreateQuestionnaire() {
                       {/* Inline poll creator */}
                       <InlinePollCreator
                         onPollCreated={handlePollCreated}
-                        showIncentives={rewardType !== "shared_pool"}
+                        showIncentives={false}
                         defaultOpen={availablePolls.length === 0}
+                        inheritedCategory={category}
+                        inheritedDurationSecs={durationInput.durationSecs}
                       />
                     </div>
 
@@ -1161,14 +1145,12 @@ export default function CreateQuestionnaire() {
                     <p className="font-medium">{category || "None"}</p>
                   </div>
                   <div>
-                    <span className="text-muted-foreground">Start:</span>
+                    <span className="text-muted-foreground">Duration:</span>
                     <p className="font-medium">
-                      {new Date(startDate).toLocaleString()}
+                      {durationInput.mode === "fixed"
+                        ? `${durationInput.fixedDuration === "1h" ? "1 Hour" : durationInput.fixedDuration === "24h" ? "24 Hours" : durationInput.fixedDuration === "3d" ? "3 Days" : "1 Week"}`
+                        : `${new Date(durationInput.startDate).toLocaleString()} → ${new Date(durationInput.endDate).toLocaleString()}`}
                     </p>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">End:</span>
-                    <p className="font-medium">{new Date(endDate).toLocaleString()}</p>
                   </div>
                 </div>
                 {description && (

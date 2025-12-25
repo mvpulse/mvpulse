@@ -17,6 +17,10 @@ interface PollCreationModalProps {
   onPollCreated: (data: PollFormData) => void;
   /** Whether incentives should be shown (false if questionnaire has shared rewards) */
   showIncentives?: boolean;
+  /** Inherited category from parent questionnaire (hides category field) */
+  inheritedCategory?: string;
+  /** Inherited duration in seconds from parent questionnaire (hides duration field) */
+  inheritedDurationSecs?: number;
 }
 
 export function PollCreationModal({
@@ -24,6 +28,8 @@ export function PollCreationModal({
   onOpenChange,
   onPollCreated,
   showIncentives = false,
+  inheritedCategory,
+  inheritedDurationSecs,
 }: PollCreationModalProps) {
   const handleSubmit = (data: PollFormData) => {
     onPollCreated(data);
@@ -53,6 +59,8 @@ export function PollCreationModal({
             onSubmit={handleSubmit}
             onCancel={handleCancel}
             submitButtonText="Add Poll"
+            inheritedCategory={inheritedCategory}
+            inheritedDurationSecs={inheritedDurationSecs}
           />
         </div>
       </DialogContent>

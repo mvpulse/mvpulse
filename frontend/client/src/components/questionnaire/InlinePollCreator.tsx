@@ -18,12 +18,18 @@ interface InlinePollCreatorProps {
   showIncentives?: boolean;
   /** Controlled open state */
   defaultOpen?: boolean;
+  /** Inherited category from parent questionnaire (hides category field) */
+  inheritedCategory?: string;
+  /** Inherited duration in seconds from parent questionnaire (hides duration field) */
+  inheritedDurationSecs?: number;
 }
 
 export function InlinePollCreator({
   onPollCreated,
   showIncentives = false,
   defaultOpen = false,
+  inheritedCategory,
+  inheritedDurationSecs,
 }: InlinePollCreatorProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen ? "create-poll" : "");
 
@@ -61,6 +67,8 @@ export function InlinePollCreator({
               onSubmit={handleSubmit}
               onCancel={handleCancel}
               submitButtonText="Add Poll"
+              inheritedCategory={inheritedCategory}
+              inheritedDurationSecs={inheritedDurationSecs}
             />
           </div>
         </AccordionContent>

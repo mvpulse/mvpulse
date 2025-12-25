@@ -29,6 +29,10 @@ interface TabbedPollSelectorProps {
   defaultTab?: "existing" | "create";
   /** Number of pending new polls (for badge display) */
   pendingNewPollsCount?: number;
+  /** Inherited category from parent questionnaire (hides category field) */
+  inheritedCategory?: string;
+  /** Inherited duration in seconds from parent questionnaire (hides duration field) */
+  inheritedDurationSecs?: number;
 }
 
 export function TabbedPollSelector({
@@ -40,6 +44,8 @@ export function TabbedPollSelector({
   showIncentives = false,
   defaultTab = "existing",
   pendingNewPollsCount = 0,
+  inheritedCategory,
+  inheritedDurationSecs,
 }: TabbedPollSelectorProps) {
   const handleTogglePoll = (pollId: number) => {
     if (selectedPollIds.includes(pollId)) {
@@ -179,6 +185,8 @@ export function TabbedPollSelector({
               showIncentives={showIncentives}
               onSubmit={handleSubmit}
               submitButtonText="Add Poll"
+              inheritedCategory={inheritedCategory}
+              inheritedDurationSecs={inheritedDurationSecs}
             />
           </CardContent>
         </Card>

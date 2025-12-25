@@ -13,11 +13,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { DurationInput } from "@/components/ui/duration-input";
 import { Plus, Trash2, Sparkles, ArrowRight, ArrowLeft, Check, Loader2, Coins, Info, Calculator } from "lucide-react";
 import { useState, useMemo, useCallback } from "react";
 import { useContract } from "@/hooks/useContract";
 import { useWalletConnection } from "@/hooks/useWalletConnection";
 import { useNetwork } from "@/contexts/NetworkContext";
+import { useDurationInput, DURATION_OPTIONS, type DurationKey } from "@/hooks/useDurationInput";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { REWARD_TYPE, PLATFORM_FEE_BPS, calculatePlatformFee, calculateNetAmount } from "@/types/poll";
@@ -25,15 +27,9 @@ import { COIN_TYPES, getCoinSymbol, CoinTypeId } from "@/lib/tokens";
 import { TransactionConfirmationDialog } from "@/components/TransactionConfirmationDialog";
 import { showTransactionSuccessToast, showTransactionErrorToast } from "@/lib/transaction-feedback";
 
-// Duration options in seconds
-export const DURATION_OPTIONS = {
-  "1h": 3600,
-  "24h": 86400,
-  "3d": 259200,
-  "1w": 604800,
-} as const;
-
-export type DurationKey = keyof typeof DURATION_OPTIONS;
+// Re-export duration types for backwards compatibility
+export { DURATION_OPTIONS };
+export type { DurationKey };
 
 // Poll form data (used for embedded mode callback)
 export interface PollFormData {
@@ -41,6 +37,7 @@ export interface PollFormData {
   description: string;
   category: string;
   duration: DurationKey;
+  durationSecs: number; // actual duration in seconds
   options: string[];
   rewardType: number;
   selectedToken: CoinTypeId;
@@ -83,6 +80,10 @@ export interface PollCreationFormProps {
   isSubmitting?: boolean;
   /** Custom submit button text */
   submitButtonText?: string;
+  /** Inherited category from parent questionnaire (hides category field) */
+  inheritedCategory?: string;
+  /** Inherited duration in seconds from parent questionnaire (hides duration field) */
+  inheritedDurationSecs?: number;
 }
 
 export function PollCreationForm({
@@ -95,6 +96,8 @@ export function PollCreationForm({
   onCancel,
   isSubmitting = false,
   submitButtonText,
+  inheritedCategory,
+  inheritedDurationSecs,
 }: PollCreationFormProps) {
   const { isConnected, isPrivyWallet } = useWalletConnection();
   const { createPoll, loading } = useContract();
@@ -110,15 +113,26 @@ export function PollCreationForm({
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
 
+  // Check if we have inherited values (embedded in questionnaire)
+  const hasInheritedCategory = inheritedCategory !== undefined;
+  const hasInheritedDuration = inheritedDurationSecs !== undefined;
+
   // Form state
   const [step, setStep] = useState(1);
   const [title, setTitle] = useState(initialValues?.title || "");
   const [description, setDescription] = useState(initialValues?.description || "");
-  const [category, setCategory] = useState(initialValues?.category || "");
-  const [duration, setDuration] = useState<DurationKey>(initialValues?.duration || "24h");
+  const [category, setCategory] = useState(inheritedCategory || initialValues?.category || "");
+
+  // Duration state with unified input hook
+  const durationInput = useDurationInput("fixed");
   const [options, setOptions] = useState<string[]>(
     initialValues?.options?.length ? initialValues.options : ["", ""]
   );
+
+  // Compute effective duration (inherited or from input)
+  const effectiveDurationSecs = hasInheritedDuration
+    ? inheritedDurationSecs
+    : durationInput.durationSecs;
 
   // Incentives state
   const [rewardType, setRewardType] = useState<number>(initialValues?.rewardType ?? REWARD_TYPE.NONE);
@@ -233,8 +247,9 @@ export function PollCreationForm({
     return {
       title: title.trim(),
       description: description.trim(),
-      category,
-      duration,
+      category: hasInheritedCategory ? inheritedCategory : category,
+      duration: durationInput.fixedDuration,
+      durationSecs: effectiveDurationSecs,
       options: validOptions,
       rewardType,
       selectedToken,
@@ -242,7 +257,7 @@ export function PollCreationForm({
       maxVoters,
       fundAmount: fundAmountOctas,
     };
-  }, [title, description, category, duration, options, rewardType, selectedToken, calculations]);
+  }, [title, description, category, durationInput.fixedDuration, effectiveDurationSecs, options, rewardType, selectedToken, calculations, hasInheritedCategory, inheritedCategory]);
 
   // Execute the poll creation transaction (standalone mode)
   const executeCreatePoll = async () => {
@@ -257,7 +272,7 @@ export function PollCreationForm({
         options: formData.options,
         rewardPerVote: formData.rewardPerVote,
         maxVoters: formData.maxVoters,
-        durationSecs: DURATION_OPTIONS[duration],
+        durationSecs: effectiveDurationSecs,
         fundAmount: formData.fundAmount,
         coinTypeId: formData.selectedToken,
       });
@@ -409,7 +424,8 @@ export function PollCreationForm({
                 onChange={(e) => setDescription(e.target.value)}
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            {/* Category - hidden when inherited from questionnaire */}
+            {!hasInheritedCategory && (
               <div className="space-y-2">
                 <Label>Category</Label>
                 <Select value={category} onValueChange={setCategory}>
@@ -423,21 +439,23 @@ export function PollCreationForm({
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
-                <Label>Duration *</Label>
-                <Select value={duration} onValueChange={(v) => setDuration(v as DurationKey)}>
-                  <SelectTrigger className="bg-muted/30">
-                    <SelectValue placeholder="Select duration" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1h">1 Hour</SelectItem>
-                    <SelectItem value="24h">24 Hours</SelectItem>
-                    <SelectItem value="3d">3 Days</SelectItem>
-                    <SelectItem value="1w">1 Week</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
+            )}
+
+            {/* Duration - hidden when inherited from questionnaire */}
+            {!hasInheritedDuration && (
+              <DurationInput
+                mode={durationInput.mode}
+                onModeChange={durationInput.setMode}
+                fixedDuration={durationInput.fixedDuration}
+                onFixedDurationChange={durationInput.setFixedDuration}
+                startDate={durationInput.startDate}
+                endDate={durationInput.endDate}
+                onStartDateChange={durationInput.setStartDate}
+                onEndDateChange={durationInput.setEndDate}
+                compact={compact}
+                label="Duration *"
+              />
+            )}
           </CardContent>
         </Card>
       )}
