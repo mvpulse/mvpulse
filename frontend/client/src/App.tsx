@@ -24,6 +24,7 @@ import ManagePoll from "@/pages/creator/ManagePoll";
 import Distributions from "@/pages/creator/Distributions";
 import QuestManager from "@/pages/creator/QuestManager";
 import ManageQuestionnaires from "@/pages/creator/ManageQuestionnaires";
+import EditQuestionnaire from "@/pages/creator/EditQuestionnaire";
 
 // Participant pages
 import ParticipantDashboard from "@/pages/participant/ParticipantDashboard";
@@ -67,6 +68,7 @@ function App() {
             <Route path="/creator/manage/:pollId" component={ManagePoll} />
             <Route path="/creator/manage" component={ManagePolls} />
             <Route path="/creator/questionnaires" component={ManageQuestionnaires} />
+            <Route path="/creator/questionnaires/:id" component={EditQuestionnaire} />
             <Route path="/creator/distributions" component={Distributions} />
             <Route path="/creator/quests" component={QuestManager} />
 
