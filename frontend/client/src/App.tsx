@@ -25,6 +25,7 @@ import Distributions from "@/pages/creator/Distributions";
 import QuestManager from "@/pages/creator/QuestManager";
 import ManageQuestionnaires from "@/pages/creator/ManageQuestionnaires";
 import EditQuestionnaire from "@/pages/creator/EditQuestionnaire";
+import SeasonManager from "@/pages/creator/SeasonManager";
 
 // Participant pages
 import ParticipantDashboard from "@/pages/participant/ParticipantDashboard";
@@ -71,6 +72,7 @@ function App() {
             <Route path="/creator/questionnaires/:id" component={EditQuestionnaire} />
             <Route path="/creator/distributions" component={Distributions} />
             <Route path="/creator/quests" component={QuestManager} />
+            <Route path="/creator/seasons" component={SeasonManager} />
 
             {/* Participant routes */}
             <Route path="/participant" component={ParticipantDashboard} />

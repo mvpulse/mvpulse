@@ -234,6 +234,7 @@ export const userSeasonSnapshots = pgTable("user_season_snapshots", {
   walletAddress: varchar("wallet_address", { length: 66 }).notNull(),
 
   finalTier: integer("final_tier").notNull(),
+  finalRank: integer("final_rank").notNull(), // User's final rank in the season
   totalPoints: integer("total_points").notNull(),
   totalVotes: integer("total_votes").notNull(),
   pulseBalanceSnapshot: varchar("pulse_balance_snapshot", { length: 50 }).notNull(), // PULSE at season end
