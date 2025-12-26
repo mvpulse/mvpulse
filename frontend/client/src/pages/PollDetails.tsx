@@ -22,6 +22,7 @@ import { useWalletConnection } from "@/hooks/useWalletConnection";
 import { useNetwork } from "@/contexts/NetworkContext";
 import { useVoteLimit } from "@/hooks/useVoteLimit";
 import { useSeason } from "@/hooks/useQuests";
+import { useReferral } from "@/hooks/useReferral";
 import { truncateAddress } from "@/lib/contract";
 import { getCoinSymbol, CoinTypeId, COIN_TYPES } from "@/lib/tokens";
 import { showTransactionSuccessToast, showTransactionErrorToast } from "@/lib/transaction-feedback";
@@ -59,6 +60,9 @@ export default function PollDetails() {
 
   // Season tracking for quest progress
   const { season } = useSeason();
+
+  // Referral system
+  const { referralCode } = useReferral(address);
 
   const [poll, setPoll] = useState<PollWithMeta | null>(null);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
@@ -181,8 +185,15 @@ export default function PollDetails() {
   };
 
   const handleShare = () => {
-    navigator.clipboard.writeText(window.location.href);
-    toast.success("Link copied to clipboard!");
+    // Include referral code in the shared URL if user is connected
+    let shareUrl = window.location.href;
+    if (referralCode && isConnected) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("ref", referralCode);
+      shareUrl = url.toString();
+    }
+    navigator.clipboard.writeText(shareUrl);
+    toast.success(referralCode ? "Referral link copied!" : "Link copied to clipboard!");
   };
 
   // Handle claiming reward (for Manual Pull mode)
@@ -333,6 +344,8 @@ export default function PollDetails() {
         return { label: "Claiming", variant: "default" as const, className: "bg-yellow-500/20 text-yellow-500 border-yellow-500/50" };
       case POLL_STATUS.CLOSED:
         return { label: "Closed", variant: "secondary" as const, className: "" };
+      case POLL_STATUS.FINALIZED:
+        return { label: "Finalized", variant: "default" as const, className: "bg-blue-500/20 text-blue-500 border-blue-500/50" };
       default:
         return { label: "Unknown", variant: "secondary" as const, className: "" };
     }

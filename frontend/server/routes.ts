@@ -12,11 +12,21 @@ import {
   userSeasonSnapshots,
   sponsorshipLogs,
   userSettings,
+  referralCodes,
+  referrals,
+  referralMilestones,
+  referralStats,
   TIERS,
   TIER_VOTE_LIMITS,
   TIER_PULSE_THRESHOLDS,
   QUEST_TYPES,
   SEASON_STATUS,
+  REFERRAL_STATUS,
+  REFERRAL_MILESTONES,
+  REFERRAL_REWARDS,
+  REFERRAL_TIERS,
+  REFERRAL_TIER_THRESHOLDS,
+  REFERRAL_TIER_MULTIPLIERS,
   type UserProfile,
   type Season,
   type Quest,
@@ -349,6 +359,14 @@ export async function registerRoutes(
 
       // Update quest progress for vote-related quests
       // (This would trigger quest progress updates)
+
+      // Check and award referral milestones based on total votes
+      try {
+        await checkReferralMilestones(profile.walletAddress, updated.seasonVotes);
+      } catch (refError) {
+        console.error("Error checking referral milestones:", refError);
+        // Don't fail the vote recording if referral check fails
+      }
 
       const tier = calculateTier(updated.cachedPulseBalance, updated.cachedStakedPulse, updated.currentStreak);
       const voteLimit = TIER_VOTE_LIMITS[tier as keyof typeof TIER_VOTE_LIMITS];
@@ -1059,6 +1077,544 @@ export async function registerRoutes(
       res.status(500).json({ success: false, error: "Failed to update settings" });
     }
   });
+
+  // ============================================
+  // Referral System Endpoints
+  // ============================================
+
+  /**
+   * Generate a short referral code from wallet address
+   */
+  function generateReferralCode(walletAddress: string): string {
+    // Use last 8 characters of the address + random suffix
+    const addressPart = walletAddress.slice(-6).toUpperCase();
+    const randomPart = Math.random().toString(36).substring(2, 5).toUpperCase();
+    return `${addressPart}${randomPart}`;
+  }
+
+  /**
+   * Calculate referral tier based on active referrals
+   */
+  function calculateReferralTier(activeReferrals: number): number {
+    if (activeReferrals >= REFERRAL_TIER_THRESHOLDS[REFERRAL_TIERS.PLATINUM]) {
+      return REFERRAL_TIERS.PLATINUM;
+    } else if (activeReferrals >= REFERRAL_TIER_THRESHOLDS[REFERRAL_TIERS.GOLD]) {
+      return REFERRAL_TIERS.GOLD;
+    } else if (activeReferrals >= REFERRAL_TIER_THRESHOLDS[REFERRAL_TIERS.SILVER]) {
+      return REFERRAL_TIERS.SILVER;
+    } else if (activeReferrals >= REFERRAL_TIER_THRESHOLDS[REFERRAL_TIERS.BRONZE]) {
+      return REFERRAL_TIERS.BRONZE;
+    }
+    return REFERRAL_TIERS.NONE;
+  }
+
+  /**
+   * Get or create referral stats for a user
+   */
+  async function getOrCreateReferralStats(walletAddress: string) {
+    const normalizedAddress = walletAddress.toLowerCase();
+
+    const [existing] = await db
+      .select()
+      .from(referralStats)
+      .where(eq(referralStats.walletAddress, normalizedAddress))
+      .limit(1);
+
+    if (existing) return existing;
+
+    const [created] = await db
+      .insert(referralStats)
+      .values({ walletAddress: normalizedAddress })
+      .returning();
+
+    return created;
+  }
+
+  /**
+   * Award referral milestone and update stats
+   */
+  async function awardReferralMilestone(
+    referralId: string,
+    referrerAddress: string,
+    refereeAddress: string,
+    milestoneType: string
+  ): Promise<{ referrerPoints: number; refereePoints: number } | null> {
+    // Check if milestone already awarded
+    const [existingMilestone] = await db
+      .select()
+      .from(referralMilestones)
+      .where(
+        and(
+          eq(referralMilestones.referralId, referralId),
+          eq(referralMilestones.milestoneType, milestoneType)
+        )
+      )
+      .limit(1);
+
+    if (existingMilestone) return null;
+
+    // Get referrer's stats to calculate tier multiplier
+    const referrerStats = await getOrCreateReferralStats(referrerAddress);
+    const tierMultiplier = REFERRAL_TIER_MULTIPLIERS[referrerStats.currentTier as keyof typeof REFERRAL_TIER_MULTIPLIERS] || 1;
+
+    // Get base rewards
+    const baseRewards = REFERRAL_REWARDS[milestoneType as keyof typeof REFERRAL_REWARDS];
+    if (!baseRewards) return null;
+
+    const referrerPoints = Math.floor(baseRewards.referrer * tierMultiplier);
+    const refereePoints = baseRewards.referee;
+
+    // Create milestone record
+    await db.insert(referralMilestones).values({
+      referralId,
+      milestoneType,
+      referrerPointsAwarded: referrerPoints,
+      refereePointsAwarded: refereePoints,
+    });
+
+    // Update referrer's stats
+    await db
+      .update(referralStats)
+      .set({
+        totalPointsEarned: sql`${referralStats.totalPointsEarned} + ${referrerPoints}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(referralStats.walletAddress, referrerAddress.toLowerCase()));
+
+    // Update referee's season points if they have a profile
+    if (refereePoints > 0) {
+      await db
+        .update(userProfiles)
+        .set({
+          seasonPoints: sql`${userProfiles.seasonPoints} + ${refereePoints}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(userProfiles.walletAddress, refereeAddress.toLowerCase()));
+    }
+
+    // Update referrer's season points
+    if (referrerPoints > 0) {
+      await db
+        .update(userProfiles)
+        .set({
+          seasonPoints: sql`${userProfiles.seasonPoints} + ${referrerPoints}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(userProfiles.walletAddress, referrerAddress.toLowerCase()));
+    }
+
+    return { referrerPoints, refereePoints };
+  }
+
+  /**
+   * GET /api/referral/code/:address
+   * Get or generate referral code for a wallet address
+   */
+  app.get("/api/referral/code/:address", async (req, res) => {
+    try {
+      const { address } = req.params;
+      const normalizedAddress = address.toLowerCase();
+
+      // Check for existing code
+      const [existing] = await db
+        .select()
+        .from(referralCodes)
+        .where(eq(referralCodes.walletAddress, normalizedAddress))
+        .limit(1);
+
+      if (existing) {
+        return res.json({ success: true, data: existing });
+      }
+
+      // Generate new code (with collision handling)
+      let code = generateReferralCode(address);
+      let attempts = 0;
+      while (attempts < 10) {
+        const [collision] = await db
+          .select()
+          .from(referralCodes)
+          .where(eq(referralCodes.code, code))
+          .limit(1);
+
+        if (!collision) break;
+        code = generateReferralCode(address);
+        attempts++;
+      }
+
+      // Create new referral code
+      const [created] = await db
+        .insert(referralCodes)
+        .values({
+          walletAddress: normalizedAddress,
+          code,
+        })
+        .returning();
+
+      // Ensure referral stats exist
+      await getOrCreateReferralStats(normalizedAddress);
+
+      res.json({ success: true, data: created });
+    } catch (error) {
+      console.error("Error getting/creating referral code:", error);
+      res.status(500).json({ success: false, error: "Failed to get referral code" });
+    }
+  });
+
+  /**
+   * GET /api/referral/validate/:code
+   * Validate a referral code and get referrer info
+   */
+  app.get("/api/referral/validate/:code", async (req, res) => {
+    try {
+      const { code } = req.params;
+
+      const [referralCode] = await db
+        .select()
+        .from(referralCodes)
+        .where(eq(referralCodes.code, code.toUpperCase()))
+        .limit(1);
+
+      if (!referralCode) {
+        return res.status(404).json({ success: false, error: "Invalid referral code" });
+      }
+
+      res.json({
+        success: true,
+        data: {
+          code: referralCode.code,
+          referrerAddress: referralCode.walletAddress,
+        },
+      });
+    } catch (error) {
+      console.error("Error validating referral code:", error);
+      res.status(500).json({ success: false, error: "Failed to validate referral code" });
+    }
+  });
+
+  /**
+   * POST /api/referral/track
+   * Track a referral when a new user connects with a referral code
+   */
+  app.post("/api/referral/track", async (req, res) => {
+    try {
+      const { refereeAddress, referralCode } = req.body;
+
+      if (!refereeAddress || !referralCode) {
+        return res.status(400).json({ success: false, error: "Missing required fields" });
+      }
+
+      const normalizedRefereeAddress = refereeAddress.toLowerCase();
+
+      // Check if referee has already been referred
+      const [existingReferral] = await db
+        .select()
+        .from(referrals)
+        .where(eq(referrals.refereeAddress, normalizedRefereeAddress))
+        .limit(1);
+
+      if (existingReferral) {
+        return res.status(400).json({ success: false, error: "User has already been referred" });
+      }
+
+      // Validate referral code and get referrer
+      const [codeRecord] = await db
+        .select()
+        .from(referralCodes)
+        .where(eq(referralCodes.code, referralCode.toUpperCase()))
+        .limit(1);
+
+      if (!codeRecord) {
+        return res.status(404).json({ success: false, error: "Invalid referral code" });
+      }
+
+      const referrerAddress = codeRecord.walletAddress;
+
+      // Prevent self-referral
+      if (referrerAddress === normalizedRefereeAddress) {
+        return res.status(400).json({ success: false, error: "Cannot refer yourself" });
+      }
+
+      // Prevent circular referral
+      const [reverseReferral] = await db
+        .select()
+        .from(referrals)
+        .where(
+          and(
+            eq(referrals.referrerAddress, normalizedRefereeAddress),
+            eq(referrals.refereeAddress, referrerAddress)
+          )
+        )
+        .limit(1);
+
+      if (reverseReferral) {
+        return res.status(400).json({ success: false, error: "Circular referral not allowed" });
+      }
+
+      // Create referral record
+      const [newReferral] = await db
+        .insert(referrals)
+        .values({
+          referrerAddress,
+          refereeAddress: normalizedRefereeAddress,
+          referralCode: referralCode.toUpperCase(),
+          status: REFERRAL_STATUS.WALLET_CONNECTED,
+          activatedAt: new Date(),
+        })
+        .returning();
+
+      // Update referrer's total referrals count
+      await db
+        .update(referralStats)
+        .set({
+          totalReferrals: sql`${referralStats.totalReferrals} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(referralStats.walletAddress, referrerAddress));
+
+      // Award wallet_connect milestone
+      const milestoneResult = await awardReferralMilestone(
+        newReferral.id,
+        referrerAddress,
+        normalizedRefereeAddress,
+        REFERRAL_MILESTONES.WALLET_CONNECT
+      );
+
+      res.json({
+        success: true,
+        data: {
+          referral: newReferral,
+          milestoneAwarded: milestoneResult,
+        },
+      });
+    } catch (error) {
+      console.error("Error tracking referral:", error);
+      res.status(500).json({ success: false, error: "Failed to track referral" });
+    }
+  });
+
+  /**
+   * GET /api/referral/stats/:address
+   * Get referral statistics for a user
+   */
+  app.get("/api/referral/stats/:address", async (req, res) => {
+    try {
+      const { address } = req.params;
+      const normalizedAddress = address.toLowerCase();
+
+      const stats = await getOrCreateReferralStats(normalizedAddress);
+
+      // Get referral code
+      const [codeRecord] = await db
+        .select()
+        .from(referralCodes)
+        .where(eq(referralCodes.walletAddress, normalizedAddress))
+        .limit(1);
+
+      // Calculate next tier threshold
+      const currentTier = stats.currentTier;
+      let nextTierThreshold = null;
+      let nextTierName = null;
+
+      if (currentTier < REFERRAL_TIERS.PLATINUM) {
+        const nextTier = currentTier + 1;
+        nextTierThreshold = REFERRAL_TIER_THRESHOLDS[nextTier as keyof typeof REFERRAL_TIER_THRESHOLDS];
+        nextTierName = ["None", "Bronze", "Silver", "Gold", "Platinum"][nextTier];
+      }
+
+      res.json({
+        success: true,
+        data: {
+          ...stats,
+          referralCode: codeRecord?.code || null,
+          tierName: ["None", "Bronze", "Silver", "Gold", "Platinum"][currentTier],
+          tierMultiplier: REFERRAL_TIER_MULTIPLIERS[currentTier as keyof typeof REFERRAL_TIER_MULTIPLIERS],
+          nextTierThreshold,
+          nextTierName,
+        },
+      });
+    } catch (error) {
+      console.error("Error getting referral stats:", error);
+      res.status(500).json({ success: false, error: "Failed to get referral stats" });
+    }
+  });
+
+  /**
+   * GET /api/referral/referees/:address
+   * Get list of referees for a referrer
+   */
+  app.get("/api/referral/referees/:address", async (req, res) => {
+    try {
+      const { address } = req.params;
+      const normalizedAddress = address.toLowerCase();
+
+      const refereeList = await db
+        .select({
+          id: referrals.id,
+          refereeAddress: referrals.refereeAddress,
+          status: referrals.status,
+          createdAt: referrals.createdAt,
+          activatedAt: referrals.activatedAt,
+          completedAt: referrals.completedAt,
+        })
+        .from(referrals)
+        .where(eq(referrals.referrerAddress, normalizedAddress))
+        .orderBy(desc(referrals.createdAt));
+
+      // Get milestones for each referral
+      const refereesWithMilestones = await Promise.all(
+        refereeList.map(async (referee) => {
+          const milestones = await db
+            .select()
+            .from(referralMilestones)
+            .where(eq(referralMilestones.referralId, referee.id))
+            .orderBy(desc(referralMilestones.achievedAt));
+
+          const totalPointsFromReferee = milestones.reduce(
+            (sum, m) => sum + m.referrerPointsAwarded,
+            0
+          );
+
+          return {
+            ...referee,
+            milestones,
+            totalPointsEarned: totalPointsFromReferee,
+          };
+        })
+      );
+
+      res.json({ success: true, data: refereesWithMilestones });
+    } catch (error) {
+      console.error("Error getting referees:", error);
+      res.status(500).json({ success: false, error: "Failed to get referees" });
+    }
+  });
+
+  /**
+   * GET /api/referral/leaderboard
+   * Get referral leaderboard
+   */
+  app.get("/api/referral/leaderboard", async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 50;
+      const offset = parseInt(req.query.offset as string) || 0;
+
+      const leaderboard = await db
+        .select()
+        .from(referralStats)
+        .where(gte(referralStats.totalReferrals, 1))
+        .orderBy(desc(referralStats.totalPointsEarned))
+        .limit(limit)
+        .offset(offset);
+
+      // Add rank
+      const rankedLeaderboard = leaderboard.map((entry, index) => ({
+        ...entry,
+        rank: offset + index + 1,
+        tierName: ["None", "Bronze", "Silver", "Gold", "Platinum"][entry.currentTier],
+      }));
+
+      res.json({ success: true, data: rankedLeaderboard });
+    } catch (error) {
+      console.error("Error getting referral leaderboard:", error);
+      res.status(500).json({ success: false, error: "Failed to get leaderboard" });
+    }
+  });
+
+  /**
+   * Internal function: Check and award referral milestones based on vote count
+   * Called after recording a vote
+   */
+  async function checkReferralMilestones(walletAddress: string, totalVotes: number) {
+    const normalizedAddress = walletAddress.toLowerCase();
+
+    // Find referral where this address is the referee
+    const [referral] = await db
+      .select()
+      .from(referrals)
+      .where(eq(referrals.refereeAddress, normalizedAddress))
+      .limit(1);
+
+    if (!referral) return;
+
+    const referrerAddress = referral.referrerAddress;
+
+    // Check first_vote milestone
+    if (totalVotes >= 1 && referral.status < REFERRAL_STATUS.FIRST_VOTE) {
+      await awardReferralMilestone(
+        referral.id,
+        referrerAddress,
+        normalizedAddress,
+        REFERRAL_MILESTONES.FIRST_VOTE
+      );
+
+      // Update referral status and active referrals count
+      await db
+        .update(referrals)
+        .set({
+          status: REFERRAL_STATUS.FIRST_VOTE,
+          completedAt: new Date(),
+        })
+        .where(eq(referrals.id, referral.id));
+
+      // Update referrer's active referrals and recalculate tier
+      const [updatedStats] = await db
+        .update(referralStats)
+        .set({
+          activeReferrals: sql`${referralStats.activeReferrals} + 1`,
+          updatedAt: new Date(),
+        })
+        .where(eq(referralStats.walletAddress, referrerAddress))
+        .returning();
+
+      if (updatedStats) {
+        const newTier = calculateReferralTier(updatedStats.activeReferrals);
+        if (newTier !== updatedStats.currentTier) {
+          await db
+            .update(referralStats)
+            .set({ currentTier: newTier, updatedAt: new Date() })
+            .where(eq(referralStats.walletAddress, referrerAddress));
+        }
+      }
+    }
+
+    // Check votes_10 milestone
+    if (totalVotes >= 10) {
+      await awardReferralMilestone(
+        referral.id,
+        referrerAddress,
+        normalizedAddress,
+        REFERRAL_MILESTONES.VOTES_10
+      );
+    }
+
+    // Check votes_50 milestone
+    if (totalVotes >= 50) {
+      await awardReferralMilestone(
+        referral.id,
+        referrerAddress,
+        normalizedAddress,
+        REFERRAL_MILESTONES.VOTES_50
+      );
+    }
+
+    // Check votes_100 milestone
+    if (totalVotes >= 100) {
+      await awardReferralMilestone(
+        referral.id,
+        referrerAddress,
+        normalizedAddress,
+        REFERRAL_MILESTONES.VOTES_100
+      );
+
+      // Mark referral as completed
+      if (referral.status < REFERRAL_STATUS.COMPLETED) {
+        await db
+          .update(referrals)
+          .set({ status: REFERRAL_STATUS.COMPLETED })
+          .where(eq(referrals.id, referral.id));
+      }
+    }
+  }
 
   return httpServer;
 }
