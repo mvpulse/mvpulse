@@ -382,7 +382,8 @@ export function useAddPollsToProject() {
       return res.json();
     },
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["project", variables.projectId] });
+      // Invalidate with full key including address for exact match
+      queryClient.invalidateQueries({ queryKey: ["project", variables.projectId, variables.address] });
       queryClient.invalidateQueries({ queryKey: ["projectAnalytics", variables.projectId] });
     },
   });
@@ -408,7 +409,7 @@ export function useRemovePollFromProject() {
       return res.json();
     },
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["project", variables.projectId] });
+      queryClient.invalidateQueries({ queryKey: ["project", variables.projectId, variables.address] });
       queryClient.invalidateQueries({ queryKey: ["projectAnalytics", variables.projectId] });
     },
   });
@@ -434,7 +435,7 @@ export function useAddQuestionnairesToProject() {
       return res.json();
     },
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["project", variables.projectId] });
+      queryClient.invalidateQueries({ queryKey: ["project", variables.projectId, variables.address] });
       queryClient.invalidateQueries({ queryKey: ["projectAnalytics", variables.projectId] });
     },
   });
@@ -460,7 +461,7 @@ export function useRemoveQuestionnaireFromProject() {
       return res.json();
     },
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["project", variables.projectId] });
+      queryClient.invalidateQueries({ queryKey: ["project", variables.projectId, variables.address] });
       queryClient.invalidateQueries({ queryKey: ["projectAnalytics", variables.projectId] });
     },
   });

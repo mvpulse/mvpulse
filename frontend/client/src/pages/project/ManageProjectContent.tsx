@@ -69,9 +69,9 @@ export default function ManageProjectContent() {
   const addQuestionnairesMutation = useAddQuestionnairesToProject();
   const removeQuestionnaireMutation = useRemoveQuestionnaireFromProject();
 
-  // Get polls already in project
+  // Get polls already in project (ensure numeric comparison)
   const projectPollIds = useMemo(() => {
-    return new Set(project?.polls?.map((p) => p.pollId) || []);
+    return new Set(project?.polls?.map((p) => Number(p.pollId)) || []);
   }, [project?.polls]);
 
   // Get questionnaires already in project
@@ -81,7 +81,7 @@ export default function ManageProjectContent() {
 
   // Filter available polls (not in project)
   const availablePolls = useMemo(() => {
-    let filtered = allPolls.filter((p) => !projectPollIds.has(p.id));
+    let filtered = allPolls.filter((p) => !projectPollIds.has(Number(p.id)));
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter((p) => p.title.toLowerCase().includes(query));
