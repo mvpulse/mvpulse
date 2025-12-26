@@ -1,23 +1,76 @@
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Trophy, Medal, Crown, Users, Award, Target, Flame } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Trophy, Medal, Crown, Users, Award, Target, Flame, History } from "lucide-react";
 import { useWalletConnection } from "@/hooks/useWalletConnection";
 import { useSeason, useLeaderboard } from "@/hooks/useQuests";
+import { useSeasons, useSeasonSnapshots, SEASON_STATUS, getSeasonStatusLabel } from "@/hooks/useSeasons";
 import { SeasonBanner, NoSeasonBanner } from "@/components/SeasonBanner";
 import { truncateAddress } from "@/lib/contract";
 
 export default function Leaderboard() {
   const { address, isConnected } = useWalletConnection();
-  const { season, isLoading: isSeasonLoading } = useSeason();
+  const { season: currentSeason, isLoading: isSeasonLoading } = useSeason();
+
+  // Fetch all seasons for selector
+  const { data: allSeasons } = useSeasons();
+
+  // State for selected season (null = current active season)
+  const [selectedSeasonId, setSelectedSeasonId] = useState<string | null>(null);
+
+  // Determine which season to display
+  const displaySeasonId = selectedSeasonId || currentSeason?.id;
+  const isViewingHistorical = selectedSeasonId && selectedSeasonId !== currentSeason?.id;
+
+  // Find the selected season from all seasons
+  const displaySeason = useMemo(() => {
+    if (!selectedSeasonId) return currentSeason;
+    return allSeasons?.find(s => s.id === selectedSeasonId) || currentSeason;
+  }, [selectedSeasonId, allSeasons, currentSeason]);
+
+  // Fetch leaderboard or snapshots depending on selection
   const {
-    leaderboard,
+    leaderboard: liveLeaderboard,
     userRank,
     isLoading: isLeaderboardLoading,
-  } = useLeaderboard(season?.id, address);
+  } = useLeaderboard(isViewingHistorical ? undefined : displaySeasonId, address);
 
-  const isLoading = isSeasonLoading || isLeaderboardLoading;
+  const { data: snapshots, isLoading: isSnapshotsLoading } = useSeasonSnapshots(
+    isViewingHistorical ? displaySeasonId : undefined
+  );
+
+  // Convert snapshots to leaderboard format for display
+  const displayLeaderboard = useMemo(() => {
+    if (isViewingHistorical && snapshots) {
+      return snapshots.map(s => ({
+        walletAddress: s.walletAddress,
+        totalPoints: s.totalPoints,
+        totalVotes: s.totalVotes,
+        questsCompleted: s.questsCompleted,
+        rank: s.finalRank,
+      }));
+    }
+    return liveLeaderboard;
+  }, [isViewingHistorical, snapshots, liveLeaderboard]);
+
+  const isLoading = isSeasonLoading || isLeaderboardLoading || (isViewingHistorical && isSnapshotsLoading);
+
+  // Get past seasons for dropdown (ended or distributed)
+  const pastSeasons = useMemo(() => {
+    if (!allSeasons) return [];
+    return allSeasons.filter(
+      s => s.status === SEASON_STATUS.ENDED || s.status === SEASON_STATUS.DISTRIBUTED
+    );
+  }, [allSeasons]);
 
   // Rank icons for top 3
   const getRankIcon = (rank: number) => {
@@ -69,20 +122,52 @@ export default function Leaderboard() {
         </p>
       </div>
 
+      {/* Season Selector */}
+      {(currentSeason || pastSeasons.length > 0) && (
+        <div className="flex items-center gap-3">
+          <History className="w-4 h-4 text-muted-foreground" />
+          <Select
+            value={selectedSeasonId || "current"}
+            onValueChange={(value) => setSelectedSeasonId(value === "current" ? null : value)}
+          >
+            <SelectTrigger className="w-[250px]">
+              <SelectValue placeholder="Select season" />
+            </SelectTrigger>
+            <SelectContent>
+              {currentSeason && (
+                <SelectItem value="current">
+                  {currentSeason.name} (Active)
+                </SelectItem>
+              )}
+              {pastSeasons.map((s) => (
+                <SelectItem key={s.id} value={s.id}>
+                  {s.name} ({getSeasonStatusLabel(s.status)})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {isViewingHistorical && (
+            <Badge variant="secondary">
+              Historical View
+            </Badge>
+          )}
+        </div>
+      )}
+
       {/* Season Banner */}
-      {season ? (
+      {displaySeason ? (
         <SeasonBanner
-          season={season}
-          userPoints={userRank?.totalPoints}
-          userRank={userRank?.rank}
+          season={displaySeason as any}
+          userPoints={isViewingHistorical ? undefined : userRank?.totalPoints}
+          userRank={isViewingHistorical ? undefined : userRank?.rank}
           compact
         />
       ) : (
         <NoSeasonBanner />
       )}
 
-      {/* User's Rank Card (if ranked) */}
-      {isConnected && userRank && (
+      {/* User's Rank Card (if ranked) - only show for current season */}
+      {isConnected && userRank && !isViewingHistorical && (
         <Card className="border-primary/30 bg-primary/5">
           <CardContent className="py-4">
             <div className="flex items-center justify-between">
@@ -115,29 +200,31 @@ export default function Leaderboard() {
       )}
 
       {/* Leaderboard Table */}
-      {season ? (
+      {displaySeason ? (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center justify-between">
               <span className="flex items-center gap-2">
                 <Trophy className="w-5 h-5 text-yellow-500" />
-                Season Rankings
+                {isViewingHistorical ? "Final Rankings" : "Season Rankings"}
               </span>
-              <Badge variant="outline">{leaderboard.length} participants</Badge>
+              <Badge variant="outline">{displayLeaderboard.length} participants</Badge>
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {leaderboard.length === 0 ? (
+            {displayLeaderboard.length === 0 ? (
               <div className="text-center py-8">
                 <Users className="w-10 h-10 mx-auto text-muted-foreground mb-3" />
                 <p className="text-muted-foreground">
-                  No participants yet. Be the first to earn points!
+                  {isViewingHistorical
+                    ? "No participant data available for this season."
+                    : "No participants yet. Be the first to earn points!"}
                 </p>
               </div>
             ) : (
               <ScrollArea className="h-[500px] pr-4">
                 <div className="space-y-2">
-                  {leaderboard.map((entry, index) => {
+                  {displayLeaderboard.map((entry, index) => {
                     const isCurrentUser = address?.toLowerCase() === entry.walletAddress.toLowerCase();
                     const rank = entry.rank || index + 1;
 

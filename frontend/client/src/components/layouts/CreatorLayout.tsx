@@ -1,5 +1,5 @@
 import { ReactNode, useMemo, useEffect } from "react";
-import { LayoutDashboard, FolderCog, Send, TrendingUp, PlusCircle, Settings, HelpCircle, ListChecks, ClipboardList } from "lucide-react";
+import { LayoutDashboard, FolderCog, Send, TrendingUp, PlusCircle, Settings, HelpCircle, ListChecks, ClipboardList, Calendar } from "lucide-react";
 import { DashboardSidebar, type SidebarSection } from "@/components/DashboardSidebar";
 import { useSidebar } from "@/contexts/SidebarContext";
 import { useTour } from "@/contexts/TourContext";
@@ -41,6 +41,7 @@ export function CreatorLayout({ children, title, description }: CreatorLayoutPro
         { label: "Manage Questionnaires", icon: ClipboardList, href: "/creator/questionnaires" },
         { label: "Distributions", icon: Send, href: "/creator/distributions", dataTour: "sidebar-distributions" },
         { label: "Quest Manager", icon: ListChecks, href: "/creator/quests", dataTour: "sidebar-quest-manager" },
+        { label: "Season Manager", icon: Calendar, href: "/creator/seasons" },
       ],
     },
     {

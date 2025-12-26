@@ -398,16 +398,146 @@ export async function registerRoutes(
   });
 
   // ============================================
+  // Season Lifecycle Helper Functions
+  // ============================================
+
+  /**
+   * End a season: create snapshots for all users, reset points, deactivate quests
+   */
+  async function endSeason(seasonId: string): Promise<void> {
+    // 1. Update season status to ENDED
+    await db
+      .update(seasons)
+      .set({ status: SEASON_STATUS.ENDED, updatedAt: new Date() })
+      .where(eq(seasons.id, seasonId));
+
+    // 2. Get all leaderboard entries ordered by points (for rank calculation)
+    const leaderboardEntries = await db
+      .select()
+      .from(seasonLeaderboard)
+      .where(eq(seasonLeaderboard.seasonId, seasonId))
+      .orderBy(desc(seasonLeaderboard.totalPoints));
+
+    // 3. Create snapshots for each user with their final rank
+    for (let i = 0; i < leaderboardEntries.length; i++) {
+      const entry = leaderboardEntries[i];
+      const rank = i + 1;
+
+      // Get user profile for additional data
+      const [profile] = await db
+        .select()
+        .from(userProfiles)
+        .where(eq(userProfiles.walletAddress, entry.walletAddress))
+        .limit(1);
+
+      // Create snapshot
+      await db.insert(userSeasonSnapshots).values({
+        seasonId,
+        walletAddress: entry.walletAddress,
+        finalTier: profile?.cachedTier || 0,
+        finalRank: rank,
+        totalPoints: entry.totalPoints,
+        totalVotes: entry.totalVotes,
+        pulseBalanceSnapshot: profile?.cachedPulseBalance || "0",
+        maxStreak: profile?.longestStreak || 0,
+        questsCompleted: entry.questsCompleted,
+      });
+    }
+
+    // 4. Reset seasonPoints and seasonVotes for users in this season
+    // Note: We identify users by their leaderboard entries
+    for (const entry of leaderboardEntries) {
+      await db
+        .update(userProfiles)
+        .set({
+          seasonPoints: 0,
+          seasonVotes: 0,
+          currentSeasonId: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(userProfiles.walletAddress, entry.walletAddress));
+    }
+
+    // 5. Deactivate all quests for this season
+    await db
+      .update(quests)
+      .set({ active: false, updatedAt: new Date() })
+      .where(eq(quests.seasonId, seasonId));
+
+    console.log(`Season ${seasonId} ended: ${leaderboardEntries.length} snapshots created`);
+  }
+
+  /**
+   * Check for expired seasons and auto-end them
+   * Returns the number of seasons that were auto-ended
+   */
+  async function checkAndEndExpiredSeasons(): Promise<number> {
+    const now = new Date();
+
+    // Find active seasons past their end time
+    const expiredSeasons = await db
+      .select()
+      .from(seasons)
+      .where(
+        and(
+          eq(seasons.status, SEASON_STATUS.ACTIVE),
+          sql`${seasons.endTime} <= ${now}`
+        )
+      );
+
+    // End each expired season
+    for (const season of expiredSeasons) {
+      try {
+        await endSeason(season.id);
+        console.log(`Auto-ended expired season: ${season.name} (${season.id})`);
+      } catch (error) {
+        console.error(`Failed to auto-end season ${season.id}:`, error);
+      }
+    }
+
+    return expiredSeasons.length;
+  }
+
+  // ============================================
   // Season Routes
   // ============================================
 
   /**
+   * GET /api/seasons
+   * List all seasons with optional status filter
+   */
+  app.get("/api/seasons", async (req, res) => {
+    try {
+      const { status, limit: limitParam, offset: offsetParam } = req.query;
+      const limit = parseInt(limitParam as string) || 20;
+      const offset = parseInt(offsetParam as string) || 0;
+
+      let query = db.select().from(seasons);
+
+      if (status !== undefined && status !== "") {
+        query = query.where(eq(seasons.status, parseInt(status as string))) as typeof query;
+      }
+
+      const allSeasons = await query
+        .orderBy(desc(seasons.seasonNumber))
+        .limit(limit)
+        .offset(offset);
+
+      res.json({ success: true, data: allSeasons });
+    } catch (error) {
+      console.error("Error fetching seasons:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch seasons" });
+    }
+  });
+
+  /**
    * GET /api/seasons/current
-   * Get the current active season
+   * Get the current active season (with auto-end check)
    */
   app.get("/api/seasons/current", async (req, res) => {
     try {
-      const now = new Date();
+      // Auto-end any expired seasons first
+      await checkAndEndExpiredSeasons();
 
       const [currentSeason] = await db
         .select()
@@ -422,6 +552,61 @@ export async function registerRoutes(
       res.json({ success: true, season: currentSeason });
     } catch (error) {
       console.error("Error fetching current season:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch season" });
+    }
+  });
+
+  /**
+   * GET /api/seasons/:seasonId
+   * Get season details with stats
+   */
+  app.get("/api/seasons/:seasonId", async (req, res) => {
+    try {
+      const { seasonId } = req.params;
+
+      // Handle "current" as a special case
+      if (seasonId === "current") {
+        await checkAndEndExpiredSeasons();
+        const [currentSeason] = await db
+          .select()
+          .from(seasons)
+          .where(eq(seasons.status, SEASON_STATUS.ACTIVE))
+          .limit(1);
+        return res.json({ success: true, data: currentSeason || null });
+      }
+
+      const [season] = await db
+        .select()
+        .from(seasons)
+        .where(eq(seasons.id, seasonId))
+        .limit(1);
+
+      if (!season) {
+        return res.status(404).json({ success: false, error: "Season not found" });
+      }
+
+      // Get participant count
+      const [countResult] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(seasonLeaderboard)
+        .where(eq(seasonLeaderboard.seasonId, seasonId));
+
+      // Get total points distributed
+      const [pointsResult] = await db
+        .select({ total: sql<number>`coalesce(sum(${seasonLeaderboard.totalPoints}), 0)` })
+        .from(seasonLeaderboard)
+        .where(eq(seasonLeaderboard.seasonId, seasonId));
+
+      res.json({
+        success: true,
+        data: {
+          ...season,
+          participantCount: countResult?.count || 0,
+          totalPointsDistributed: pointsResult?.total || 0,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching season:", error);
       res.status(500).json({ success: false, error: "Failed to fetch season" });
     }
   });
@@ -713,6 +898,32 @@ export async function registerRoutes(
         return res.status(400).json({ success: false, error: "Missing required fields" });
       }
 
+      const start = new Date(startTime);
+      const end = new Date(endTime);
+
+      if (end <= start) {
+        return res.status(400).json({ success: false, error: "End time must be after start time" });
+      }
+
+      // Check for overlapping active/pending seasons
+      const overlapping = await db
+        .select()
+        .from(seasons)
+        .where(
+          and(
+            sql`${seasons.status} IN (${SEASON_STATUS.PENDING}, ${SEASON_STATUS.ACTIVE})`,
+            sql`(${seasons.startTime} < ${end} AND ${seasons.endTime} > ${start})`
+          )
+        )
+        .limit(1);
+
+      if (overlapping.length > 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Season overlaps with existing pending/active season",
+        });
+      }
+
       // Get next season number
       const [lastSeason] = await db
         .select()
@@ -728,8 +939,8 @@ export async function registerRoutes(
           seasonNumber,
           name,
           description,
-          startTime: new Date(startTime),
-          endTime: new Date(endTime),
+          startTime: start,
+          endTime: end,
           totalPulsePool: totalPulsePool?.toString() || "0",
           status: SEASON_STATUS.PENDING,
           creatorAddress: creatorAddress.toLowerCase(),
@@ -740,6 +951,227 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error creating season:", error);
       res.status(500).json({ success: false, error: "Failed to create season" });
+    }
+  });
+
+  /**
+   * POST /api/seasons/:seasonId/start
+   * Manually start a pending season
+   */
+  app.post("/api/seasons/:seasonId/start", async (req, res) => {
+    try {
+      const { seasonId } = req.params;
+
+      const [season] = await db
+        .select()
+        .from(seasons)
+        .where(eq(seasons.id, seasonId))
+        .limit(1);
+
+      if (!season) {
+        return res.status(404).json({ success: false, error: "Season not found" });
+      }
+
+      if (season.status !== SEASON_STATUS.PENDING) {
+        return res.status(400).json({ success: false, error: "Season is not pending" });
+      }
+
+      // Check no other active season
+      const [activeSeason] = await db
+        .select()
+        .from(seasons)
+        .where(eq(seasons.status, SEASON_STATUS.ACTIVE))
+        .limit(1);
+
+      if (activeSeason) {
+        return res.status(400).json({
+          success: false,
+          error: "Another season is already active. End it first.",
+        });
+      }
+
+      // Update season and set start time to now if in the past
+      const now = new Date();
+      const newStartTime = new Date(season.startTime) < now ? now : season.startTime;
+
+      const [updated] = await db
+        .update(seasons)
+        .set({
+          status: SEASON_STATUS.ACTIVE,
+          startTime: newStartTime,
+          updatedAt: new Date(),
+        })
+        .where(eq(seasons.id, seasonId))
+        .returning();
+
+      res.json({ success: true, data: updated });
+    } catch (error) {
+      console.error("Error starting season:", error);
+      res.status(500).json({ success: false, error: "Failed to start season" });
+    }
+  });
+
+  /**
+   * POST /api/seasons/:seasonId/end
+   * Manually end an active season (triggers snapshot creation)
+   */
+  app.post("/api/seasons/:seasonId/end", async (req, res) => {
+    try {
+      const { seasonId } = req.params;
+
+      const [season] = await db
+        .select()
+        .from(seasons)
+        .where(eq(seasons.id, seasonId))
+        .limit(1);
+
+      if (!season) {
+        return res.status(404).json({ success: false, error: "Season not found" });
+      }
+
+      if (season.status !== SEASON_STATUS.ACTIVE) {
+        return res.status(400).json({ success: false, error: "Season is not active" });
+      }
+
+      // End the season (creates snapshots, resets points, deactivates quests)
+      await endSeason(seasonId);
+
+      const [updated] = await db
+        .select()
+        .from(seasons)
+        .where(eq(seasons.id, seasonId))
+        .limit(1);
+
+      res.json({ success: true, data: updated });
+    } catch (error) {
+      console.error("Error ending season:", error);
+      res.status(500).json({ success: false, error: "Failed to end season" });
+    }
+  });
+
+  /**
+   * POST /api/seasons/:seasonId/distribute
+   * Mark an ended season as distributed (after manual PULSE distribution)
+   */
+  app.post("/api/seasons/:seasonId/distribute", async (req, res) => {
+    try {
+      const { seasonId } = req.params;
+
+      const [season] = await db
+        .select()
+        .from(seasons)
+        .where(eq(seasons.id, seasonId))
+        .limit(1);
+
+      if (!season) {
+        return res.status(404).json({ success: false, error: "Season not found" });
+      }
+
+      if (season.status !== SEASON_STATUS.ENDED) {
+        return res.status(400).json({ success: false, error: "Season must be ended first" });
+      }
+
+      const [updated] = await db
+        .update(seasons)
+        .set({
+          status: SEASON_STATUS.DISTRIBUTED,
+          updatedAt: new Date(),
+        })
+        .where(eq(seasons.id, seasonId))
+        .returning();
+
+      res.json({ success: true, data: updated });
+    } catch (error) {
+      console.error("Error marking season as distributed:", error);
+      res.status(500).json({ success: false, error: "Failed to update season" });
+    }
+  });
+
+  /**
+   * GET /api/seasons/:seasonId/snapshots
+   * Get user snapshots for an ended season
+   */
+  app.get("/api/seasons/:seasonId/snapshots", async (req, res) => {
+    try {
+      const { seasonId } = req.params;
+      const limit = parseInt(req.query.limit as string) || 100;
+      const offset = parseInt(req.query.offset as string) || 0;
+
+      const snapshots = await db
+        .select()
+        .from(userSeasonSnapshots)
+        .where(eq(userSeasonSnapshots.seasonId, seasonId))
+        .orderBy(userSeasonSnapshots.finalRank)
+        .limit(limit)
+        .offset(offset);
+
+      res.json({ success: true, data: snapshots });
+    } catch (error) {
+      console.error("Error fetching snapshots:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch snapshots" });
+    }
+  });
+
+  /**
+   * POST /api/seasons/:seasonId/copy-quests
+   * Copy quests from another season to this one
+   */
+  app.post("/api/seasons/:seasonId/copy-quests", async (req, res) => {
+    try {
+      const { seasonId } = req.params;
+      const { fromSeasonId } = req.body;
+
+      if (!fromSeasonId) {
+        return res.status(400).json({ success: false, error: "fromSeasonId is required" });
+      }
+
+      // Verify target season exists and is pending
+      const [targetSeason] = await db
+        .select()
+        .from(seasons)
+        .where(eq(seasons.id, seasonId))
+        .limit(1);
+
+      if (!targetSeason) {
+        return res.status(404).json({ success: false, error: "Target season not found" });
+      }
+
+      if (targetSeason.status !== SEASON_STATUS.PENDING) {
+        return res.status(400).json({ success: false, error: "Can only copy quests to pending seasons" });
+      }
+
+      // Get quests from source season
+      const sourceQuests = await db
+        .select()
+        .from(quests)
+        .where(eq(quests.seasonId, fromSeasonId));
+
+      if (sourceQuests.length === 0) {
+        return res.status(400).json({ success: false, error: "No quests in source season" });
+      }
+
+      // Copy quests to new season
+      const newQuests = sourceQuests.map((q) => ({
+        seasonId,
+        questType: q.questType,
+        name: q.name,
+        description: q.description,
+        points: q.points,
+        targetValue: q.targetValue,
+        targetAction: q.targetAction,
+        creatorAddress: q.creatorAddress,
+        active: true,
+        startsAt: null,
+        endsAt: null,
+        maxCompletions: q.maxCompletions,
+      }));
+
+      await db.insert(quests).values(newQuests);
+
+      res.json({ success: true, copiedCount: newQuests.length });
+    } catch (error) {
+      console.error("Error copying quests:", error);
+      res.status(500).json({ success: false, error: "Failed to copy quests" });
     }
   });
 
