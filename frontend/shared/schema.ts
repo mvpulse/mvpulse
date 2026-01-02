@@ -531,3 +531,142 @@ export const questionnaireProgress = pgTable("questionnaire_progress", {
 
 export type QuestionnaireProgress = typeof questionnaireProgress.$inferSelect;
 export type InsertQuestionnaireProgress = typeof questionnaireProgress.$inferInsert;
+
+// ============================================
+// Projects System Constants
+// ============================================
+
+export const PROJECT_STATUS = {
+  ACTIVE: 0,
+  ARCHIVED: 1,
+} as const;
+
+export const PROJECT_ROLE = {
+  OWNER: 0,    // Full control, can delete project and manage all collaborators
+  ADMIN: 1,    // Can edit project, manage content, invite/remove editors and viewers
+  EDITOR: 2,   // Can add/remove polls and questionnaires
+  VIEWER: 3,   // Read-only access to project and analytics
+} as const;
+
+export const PROJECT_ROLE_NAMES = {
+  [PROJECT_ROLE.OWNER]: "Owner",
+  [PROJECT_ROLE.ADMIN]: "Admin",
+  [PROJECT_ROLE.EDITOR]: "Editor",
+  [PROJECT_ROLE.VIEWER]: "Viewer",
+} as const;
+
+// ============================================
+// Projects
+// ============================================
+
+export const projects = pgTable("projects", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+
+  // Basic info
+  name: varchar("name", { length: 200 }).notNull(),
+  description: text("description"),
+  color: varchar("color", { length: 20 }).default("#6366f1"), // Branding color
+  icon: varchar("icon", { length: 50 }), // Lucide icon name
+
+  // Ownership (creator becomes owner)
+  ownerAddress: varchar("owner_address", { length: 66 }).notNull(),
+
+  status: integer("status").default(PROJECT_STATUS.ACTIVE).notNull(),
+
+  // Cached analytics (updated periodically)
+  cachedTotalPolls: integer("cached_total_polls").default(0).notNull(),
+  cachedTotalQuestionnaires: integer("cached_total_questionnaires").default(0).notNull(),
+  cachedTotalVotes: integer("cached_total_votes").default(0).notNull(),
+  cachedTotalCompletions: integer("cached_total_completions").default(0).notNull(),
+  analyticsLastUpdated: timestamp("analytics_last_updated"),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type Project = typeof projects.$inferSelect;
+export type InsertProject = typeof projects.$inferInsert;
+
+// ============================================
+// Project Collaborators (multi-creator access)
+// ============================================
+
+export const projectCollaborators = pgTable("project_collaborators", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id", { length: 36 }).notNull(),
+  walletAddress: varchar("wallet_address", { length: 66 }).notNull(),
+  role: integer("role").notNull(), // 0=owner, 1=admin, 2=editor, 3=viewer
+
+  invitedBy: varchar("invited_by", { length: 66 }).notNull(),
+  invitedAt: timestamp("invited_at").defaultNow().notNull(),
+  acceptedAt: timestamp("accepted_at"), // null = pending invite
+});
+
+export type ProjectCollaborator = typeof projectCollaborators.$inferSelect;
+export type InsertProjectCollaborator = typeof projectCollaborators.$inferInsert;
+
+// ============================================
+// Project Polls (links on-chain polls to projects)
+// ============================================
+
+export const projectPolls = pgTable("project_polls", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id", { length: 36 }).notNull(),
+  pollId: integer("poll_id").notNull(), // On-chain poll ID
+
+  addedBy: varchar("added_by", { length: 66 }).notNull(),
+  addedAt: timestamp("added_at").defaultNow().notNull(),
+
+  // Cached poll metadata for quick lookups (synced from chain)
+  cachedTitle: varchar("cached_title", { length: 500 }),
+  cachedTotalVotes: integer("cached_total_votes").default(0),
+  cachedStatus: integer("cached_status").default(0),
+  lastSynced: timestamp("last_synced"),
+});
+
+export type ProjectPoll = typeof projectPolls.$inferSelect;
+export type InsertProjectPoll = typeof projectPolls.$inferInsert;
+
+// ============================================
+// Project Questionnaires (links questionnaires to projects)
+// ============================================
+
+export const projectQuestionnaires = pgTable("project_questionnaires", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id", { length: 36 }).notNull(),
+  questionnaireId: varchar("questionnaire_id", { length: 36 }).notNull(),
+
+  addedBy: varchar("added_by", { length: 66 }).notNull(),
+  addedAt: timestamp("added_at").defaultNow().notNull(),
+});
+
+export type ProjectQuestionnaire = typeof projectQuestionnaires.$inferSelect;
+export type InsertProjectQuestionnaire = typeof projectQuestionnaires.$inferInsert;
+
+// ============================================
+// Project Insights (AI-generated insights cache)
+// ============================================
+
+export const projectInsights = pgTable("project_insights", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id", { length: 36 }).notNull(),
+
+  insightType: varchar("insight_type", { length: 50 }).notNull(), // "summary", "trends", "recommendations"
+  content: text("content").notNull(), // AI-generated content (markdown)
+
+  // Metadata about what data was used
+  dataSnapshot: jsonb("data_snapshot").$type<{
+    pollCount: number;
+    questionnaireCount: number;
+    totalVotes: number;
+    generatedAt: string;
+  }>().notNull(),
+
+  generatedAt: timestamp("generated_at").defaultNow().notNull(),
+  expiresAt: timestamp("expires_at"), // When to regenerate (null = manual only)
+
+  requestedBy: varchar("requested_by", { length: 66 }).notNull(),
+});
+
+export type ProjectInsight = typeof projectInsights.$inferSelect;
+export type InsertProjectInsight = typeof projectInsights.$inferInsert;

@@ -7,7 +7,6 @@ import { TourProvider } from "@/contexts/TourContext";
 import { GasSponsorshipProvider } from "@/contexts/GasSponsorshipContext";
 import Home from "@/pages/Home";
 import Dashboard from "@/pages/Dashboard";
-import Projects from "@/pages/Projects";
 import CreatePoll from "@/pages/CreatePoll";
 import PollDetails from "@/pages/PollDetails";
 import Admin from "@/pages/Admin";
@@ -26,6 +25,11 @@ import QuestManager from "@/pages/creator/QuestManager";
 import ManageQuestionnaires from "@/pages/creator/ManageQuestionnaires";
 import EditQuestionnaire from "@/pages/creator/EditQuestionnaire";
 import SeasonManager from "@/pages/creator/SeasonManager";
+import ManageProjects from "@/pages/creator/ManageProjects";
+
+// Project pages
+import ProjectDetail from "@/pages/project/ProjectDetail";
+import ManageProjectContent from "@/pages/project/ManageProjectContent";
 
 // Participant pages
 import ParticipantDashboard from "@/pages/participant/ParticipantDashboard";
@@ -55,7 +59,6 @@ function App() {
           <Switch>
             <Route path="/" component={Home} />
             <Route path="/dashboard" component={Dashboard} />
-            <Route path="/projects" component={Projects} />
             <Route path="/create" component={CreatePoll} />
             <Route path="/poll/:id" component={PollDetails} />
             <Route path="/wallet" component={Wallet} />
@@ -73,6 +76,11 @@ function App() {
             <Route path="/creator/distributions" component={Distributions} />
             <Route path="/creator/quests" component={QuestManager} />
             <Route path="/creator/seasons" component={SeasonManager} />
+            <Route path="/creator/projects" component={ManageProjects} />
+
+            {/* Project routes */}
+            <Route path="/creator/projects/:id" component={ProjectDetail} />
+            <Route path="/creator/projects/:id/manage" component={ManageProjectContent} />
 
             {/* Participant routes */}
             <Route path="/participant" component={ParticipantDashboard} />

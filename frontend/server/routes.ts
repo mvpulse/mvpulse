@@ -19,6 +19,11 @@ import {
   questionnaires,
   questionnairePolls,
   questionnaireProgress,
+  projects,
+  projectCollaborators,
+  projectPolls,
+  projectQuestionnaires,
+  projectInsights,
   TIERS,
   TIER_VOTE_LIMITS,
   TIER_PULSE_THRESHOLDS,
@@ -32,12 +37,19 @@ import {
   REFERRAL_TIER_MULTIPLIERS,
   QUESTIONNAIRE_STATUS,
   QUESTIONNAIRE_REWARD_TYPE,
+  PROJECT_STATUS,
+  PROJECT_ROLE,
   type UserProfile,
   type Season,
   type Quest,
   type Questionnaire,
   type QuestionnairePoll,
   type QuestionnaireProgress,
+  type Project,
+  type ProjectCollaborator,
+  type ProjectPoll,
+  type ProjectQuestionnaire,
+  type ProjectInsight,
 } from "@shared/schema";
 
 // ============================================
@@ -2778,6 +2790,1006 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error fetching creator questionnaires:", error);
       res.status(500).json({ success: false, error: "Failed to fetch questionnaires" });
+    }
+  });
+
+  // ============================================
+  // Projects System Endpoints
+  // ============================================
+
+  /**
+   * Helper: Check if user has access to a project with required role
+   */
+  async function checkProjectAccess(
+    projectId: string,
+    walletAddress: string,
+    requiredRole: number
+  ): Promise<{ hasAccess: boolean; userRole: number | null; project: Project | null }> {
+    const normalizedAddress = walletAddress.toLowerCase();
+
+    // Get project
+    const [project] = await db
+      .select()
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1);
+
+    if (!project) {
+      return { hasAccess: false, userRole: null, project: null };
+    }
+
+    // Check if owner
+    if (project.ownerAddress === normalizedAddress) {
+      return { hasAccess: true, userRole: PROJECT_ROLE.OWNER, project };
+    }
+
+    // Check collaborator role
+    const [collab] = await db
+      .select()
+      .from(projectCollaborators)
+      .where(
+        and(
+          eq(projectCollaborators.projectId, projectId),
+          eq(projectCollaborators.walletAddress, normalizedAddress)
+        )
+      )
+      .limit(1);
+
+    if (!collab || collab.acceptedAt === null) {
+      return { hasAccess: false, userRole: null, project };
+    }
+
+    // Check if role meets requirement (lower number = higher permission)
+    if (collab.role > requiredRole) {
+      return { hasAccess: false, userRole: collab.role, project };
+    }
+
+    return { hasAccess: true, userRole: collab.role, project };
+  }
+
+  /**
+   * GET /api/projects
+   * List projects for a user (owned or collaborating)
+   */
+  app.get("/api/projects", async (req, res) => {
+    try {
+      const { owner, status, limit: limitParam, offset: offsetParam } = req.query;
+      const limit = parseInt(limitParam as string) || 20;
+      const offset = parseInt(offsetParam as string) || 0;
+
+      if (!owner) {
+        return res.status(400).json({ success: false, error: "owner parameter is required" });
+      }
+
+      const normalizedOwner = (owner as string).toLowerCase();
+
+      // Get projects owned by user
+      const ownedProjects = await db
+        .select()
+        .from(projects)
+        .where(
+          status !== undefined
+            ? and(
+                eq(projects.ownerAddress, normalizedOwner),
+                eq(projects.status, parseInt(status as string))
+              )
+            : eq(projects.ownerAddress, normalizedOwner)
+        )
+        .orderBy(desc(projects.updatedAt))
+        .limit(limit)
+        .offset(offset);
+
+      // Get projects where user is collaborator
+      const collaborations = await db
+        .select({
+          project: projects,
+          role: projectCollaborators.role,
+        })
+        .from(projectCollaborators)
+        .innerJoin(projects, eq(projects.id, projectCollaborators.projectId))
+        .where(
+          and(
+            eq(projectCollaborators.walletAddress, normalizedOwner),
+            sql`${projectCollaborators.acceptedAt} IS NOT NULL`
+          )
+        )
+        .orderBy(desc(projects.updatedAt))
+        .limit(limit);
+
+      // Combine and deduplicate
+      const allProjects = [
+        ...ownedProjects.map((p) => ({ ...p, userRole: PROJECT_ROLE.OWNER })),
+        ...collaborations.map((c) => ({ ...c.project, userRole: c.role })),
+      ];
+
+      res.json({ success: true, data: allProjects });
+    } catch (error) {
+      console.error("Error fetching projects:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch projects" });
+    }
+  });
+
+  /**
+   * GET /api/projects/:id
+   * Get project details with polls and questionnaires
+   */
+  app.get("/api/projects/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { address } = req.query;
+
+      const [project] = await db
+        .select()
+        .from(projects)
+        .where(eq(projects.id, id))
+        .limit(1);
+
+      if (!project) {
+        return res.status(404).json({ success: false, error: "Project not found" });
+      }
+
+      // Get polls in project
+      const polls = await db
+        .select()
+        .from(projectPolls)
+        .where(eq(projectPolls.projectId, id))
+        .orderBy(desc(projectPolls.addedAt));
+
+      // Get questionnaires in project
+      const questionnaireLinks = await db
+        .select()
+        .from(projectQuestionnaires)
+        .where(eq(projectQuestionnaires.projectId, id));
+
+      // Fetch full questionnaire data
+      const questionnaireIds = questionnaireLinks.map((q) => q.questionnaireId);
+      let questionnaireList: Questionnaire[] = [];
+      if (questionnaireIds.length > 0) {
+        questionnaireList = await db
+          .select()
+          .from(questionnaires)
+          .where(sql`${questionnaires.id} IN (${sql.join(questionnaireIds.map(id => sql`${id}`), sql`, `)})`);
+      }
+
+      // Get collaborators
+      const collaborators = await db
+        .select()
+        .from(projectCollaborators)
+        .where(eq(projectCollaborators.projectId, id));
+
+      // Check user role if address provided
+      let userRole = null;
+      if (address) {
+        const normalizedAddress = (address as string).toLowerCase();
+        if (project.ownerAddress === normalizedAddress) {
+          userRole = PROJECT_ROLE.OWNER;
+        } else {
+          const collab = collaborators.find((c) => c.walletAddress === normalizedAddress);
+          userRole = collab?.role ?? null;
+        }
+      }
+
+      res.json({
+        success: true,
+        data: {
+          ...project,
+          polls,
+          questionnaires: questionnaireList,
+          collaborators,
+          userRole,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching project:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch project" });
+    }
+  });
+
+  /**
+   * POST /api/projects
+   * Create a new project
+   */
+  app.post("/api/projects", async (req, res) => {
+    try {
+      const { name, description, color, icon, ownerAddress } = req.body;
+
+      if (!name || !ownerAddress) {
+        return res.status(400).json({ success: false, error: "name and ownerAddress are required" });
+      }
+
+      const normalizedOwner = ownerAddress.toLowerCase();
+
+      const [newProject] = await db
+        .insert(projects)
+        .values({
+          name,
+          description,
+          color: color || "#6366f1",
+          icon,
+          ownerAddress: normalizedOwner,
+          status: PROJECT_STATUS.ACTIVE,
+        })
+        .returning();
+
+      res.json({ success: true, data: newProject });
+    } catch (error) {
+      console.error("Error creating project:", error);
+      res.status(500).json({ success: false, error: "Failed to create project" });
+    }
+  });
+
+  /**
+   * PUT /api/projects/:id
+   * Update a project
+   */
+  app.put("/api/projects/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { name, description, color, icon, address } = req.body;
+
+      if (!address) {
+        return res.status(400).json({ success: false, error: "address is required" });
+      }
+
+      // Check access (need at least Admin role)
+      const access = await checkProjectAccess(id, address, PROJECT_ROLE.ADMIN);
+      if (!access.hasAccess) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+
+      const updateData: Partial<typeof projects.$inferInsert> = {
+        updatedAt: new Date(),
+      };
+
+      if (name !== undefined) updateData.name = name;
+      if (description !== undefined) updateData.description = description;
+      if (color !== undefined) updateData.color = color;
+      if (icon !== undefined) updateData.icon = icon;
+
+      const [updated] = await db
+        .update(projects)
+        .set(updateData)
+        .where(eq(projects.id, id))
+        .returning();
+
+      res.json({ success: true, data: updated });
+    } catch (error) {
+      console.error("Error updating project:", error);
+      res.status(500).json({ success: false, error: "Failed to update project" });
+    }
+  });
+
+  /**
+   * DELETE /api/projects/:id
+   * Archive a project (soft delete)
+   */
+  app.delete("/api/projects/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { address } = req.body;
+
+      if (!address) {
+        return res.status(400).json({ success: false, error: "address is required" });
+      }
+
+      // Check access (only Owner can delete)
+      const access = await checkProjectAccess(id, address, PROJECT_ROLE.OWNER);
+      if (!access.hasAccess) {
+        return res.status(403).json({ success: false, error: "Only owner can delete project" });
+      }
+
+      const [archived] = await db
+        .update(projects)
+        .set({
+          status: PROJECT_STATUS.ARCHIVED,
+          updatedAt: new Date(),
+        })
+        .where(eq(projects.id, id))
+        .returning();
+
+      res.json({ success: true, data: archived });
+    } catch (error) {
+      console.error("Error archiving project:", error);
+      res.status(500).json({ success: false, error: "Failed to archive project" });
+    }
+  });
+
+  // ============================================
+  // Project Content Management
+  // ============================================
+
+  /**
+   * POST /api/projects/:id/polls
+   * Add poll(s) to a project
+   */
+  app.post("/api/projects/:id/polls", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { pollIds, address, cachedTitles } = req.body;
+
+      if (!address || !pollIds || !Array.isArray(pollIds)) {
+        return res.status(400).json({ success: false, error: "address and pollIds array are required" });
+      }
+
+      // Check access (need at least Editor role)
+      const access = await checkProjectAccess(id, address, PROJECT_ROLE.EDITOR);
+      if (!access.hasAccess) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+
+      const normalizedAddress = address.toLowerCase();
+
+      // Check for duplicates
+      const existingPolls = await db
+        .select()
+        .from(projectPolls)
+        .where(eq(projectPolls.projectId, id));
+
+      const existingPollIds = new Set(existingPolls.map((p) => p.pollId));
+      const newPollIds = pollIds.filter((pid: number) => !existingPollIds.has(pid));
+
+      if (newPollIds.length === 0) {
+        return res.json({ success: true, data: [], message: "All polls already in project" });
+      }
+
+      // Add polls
+      const pollValues = newPollIds.map((pollId: number, index: number) => ({
+        projectId: id,
+        pollId,
+        addedBy: normalizedAddress,
+        cachedTitle: cachedTitles?.[index] || null,
+        lastSynced: new Date(),
+      }));
+
+      const inserted = await db.insert(projectPolls).values(pollValues).returning();
+
+      // Update cached count
+      await db
+        .update(projects)
+        .set({
+          cachedTotalPolls: sql`${projects.cachedTotalPolls} + ${inserted.length}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(projects.id, id));
+
+      res.json({ success: true, data: inserted });
+    } catch (error) {
+      console.error("Error adding polls to project:", error);
+      res.status(500).json({ success: false, error: "Failed to add polls" });
+    }
+  });
+
+  /**
+   * DELETE /api/projects/:id/polls/:pollId
+   * Remove a poll from a project
+   */
+  app.delete("/api/projects/:id/polls/:pollId", async (req, res) => {
+    try {
+      const { id, pollId } = req.params;
+      const { address } = req.body;
+
+      if (!address) {
+        return res.status(400).json({ success: false, error: "address is required" });
+      }
+
+      // Check access
+      const access = await checkProjectAccess(id, address, PROJECT_ROLE.EDITOR);
+      if (!access.hasAccess) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+
+      const [deleted] = await db
+        .delete(projectPolls)
+        .where(
+          and(
+            eq(projectPolls.projectId, id),
+            eq(projectPolls.pollId, parseInt(pollId))
+          )
+        )
+        .returning();
+
+      if (!deleted) {
+        return res.status(404).json({ success: false, error: "Poll not found in project" });
+      }
+
+      // Update cached count
+      await db
+        .update(projects)
+        .set({
+          cachedTotalPolls: sql`GREATEST(${projects.cachedTotalPolls} - 1, 0)`,
+          updatedAt: new Date(),
+        })
+        .where(eq(projects.id, id));
+
+      res.json({ success: true, data: deleted });
+    } catch (error) {
+      console.error("Error removing poll from project:", error);
+      res.status(500).json({ success: false, error: "Failed to remove poll" });
+    }
+  });
+
+  /**
+   * POST /api/projects/:id/questionnaires
+   * Add questionnaire(s) to a project
+   */
+  app.post("/api/projects/:id/questionnaires", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { questionnaireIds, address } = req.body;
+
+      if (!address || !questionnaireIds || !Array.isArray(questionnaireIds)) {
+        return res.status(400).json({ success: false, error: "address and questionnaireIds array are required" });
+      }
+
+      // Check access
+      const access = await checkProjectAccess(id, address, PROJECT_ROLE.EDITOR);
+      if (!access.hasAccess) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+
+      const normalizedAddress = address.toLowerCase();
+
+      // Check for duplicates
+      const existing = await db
+        .select()
+        .from(projectQuestionnaires)
+        .where(eq(projectQuestionnaires.projectId, id));
+
+      const existingIds = new Set(existing.map((q) => q.questionnaireId));
+      const newIds = questionnaireIds.filter((qid: string) => !existingIds.has(qid));
+
+      if (newIds.length === 0) {
+        return res.json({ success: true, data: [], message: "All questionnaires already in project" });
+      }
+
+      // Add questionnaires
+      const values = newIds.map((questionnaireId: string) => ({
+        projectId: id,
+        questionnaireId,
+        addedBy: normalizedAddress,
+      }));
+
+      const inserted = await db.insert(projectQuestionnaires).values(values).returning();
+
+      // Update cached count
+      await db
+        .update(projects)
+        .set({
+          cachedTotalQuestionnaires: sql`${projects.cachedTotalQuestionnaires} + ${inserted.length}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(projects.id, id));
+
+      res.json({ success: true, data: inserted });
+    } catch (error) {
+      console.error("Error adding questionnaires to project:", error);
+      res.status(500).json({ success: false, error: "Failed to add questionnaires" });
+    }
+  });
+
+  /**
+   * DELETE /api/projects/:id/questionnaires/:questionnaireId
+   * Remove a questionnaire from a project
+   */
+  app.delete("/api/projects/:id/questionnaires/:questionnaireId", async (req, res) => {
+    try {
+      const { id, questionnaireId } = req.params;
+      const { address } = req.body;
+
+      if (!address) {
+        return res.status(400).json({ success: false, error: "address is required" });
+      }
+
+      // Check access
+      const access = await checkProjectAccess(id, address, PROJECT_ROLE.EDITOR);
+      if (!access.hasAccess) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+
+      const [deleted] = await db
+        .delete(projectQuestionnaires)
+        .where(
+          and(
+            eq(projectQuestionnaires.projectId, id),
+            eq(projectQuestionnaires.questionnaireId, questionnaireId)
+          )
+        )
+        .returning();
+
+      if (!deleted) {
+        return res.status(404).json({ success: false, error: "Questionnaire not found in project" });
+      }
+
+      // Update cached count
+      await db
+        .update(projects)
+        .set({
+          cachedTotalQuestionnaires: sql`GREATEST(${projects.cachedTotalQuestionnaires} - 1, 0)`,
+          updatedAt: new Date(),
+        })
+        .where(eq(projects.id, id));
+
+      res.json({ success: true, data: deleted });
+    } catch (error) {
+      console.error("Error removing questionnaire from project:", error);
+      res.status(500).json({ success: false, error: "Failed to remove questionnaire" });
+    }
+  });
+
+  // ============================================
+  // Project Collaborators
+  // ============================================
+
+  /**
+   * GET /api/projects/:id/collaborators
+   * List collaborators for a project
+   */
+  app.get("/api/projects/:id/collaborators", async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const collaborators = await db
+        .select()
+        .from(projectCollaborators)
+        .where(eq(projectCollaborators.projectId, id))
+        .orderBy(projectCollaborators.role);
+
+      // Get project to include owner
+      const [project] = await db
+        .select()
+        .from(projects)
+        .where(eq(projects.id, id))
+        .limit(1);
+
+      res.json({
+        success: true,
+        data: {
+          owner: project?.ownerAddress,
+          collaborators,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching collaborators:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch collaborators" });
+    }
+  });
+
+  /**
+   * POST /api/projects/:id/collaborators
+   * Invite a collaborator to a project
+   */
+  app.post("/api/projects/:id/collaborators", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { walletAddress, role, inviterAddress } = req.body;
+
+      if (!walletAddress || role === undefined || !inviterAddress) {
+        return res.status(400).json({ success: false, error: "walletAddress, role, and inviterAddress are required" });
+      }
+
+      // Check access (Admins can invite editors/viewers, Owner can invite anyone)
+      const access = await checkProjectAccess(id, inviterAddress, PROJECT_ROLE.ADMIN);
+      if (!access.hasAccess) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+
+      // Admins can't invite other admins
+      if (access.userRole === PROJECT_ROLE.ADMIN && role <= PROJECT_ROLE.ADMIN) {
+        return res.status(403).json({ success: false, error: "Admins cannot invite other admins" });
+      }
+
+      const normalizedInvitee = walletAddress.toLowerCase();
+      const normalizedInviter = inviterAddress.toLowerCase();
+
+      // Check if already a collaborator
+      const [existing] = await db
+        .select()
+        .from(projectCollaborators)
+        .where(
+          and(
+            eq(projectCollaborators.projectId, id),
+            eq(projectCollaborators.walletAddress, normalizedInvitee)
+          )
+        )
+        .limit(1);
+
+      if (existing) {
+        return res.status(400).json({ success: false, error: "User is already a collaborator" });
+      }
+
+      // Check if inviting the owner
+      if (access.project?.ownerAddress === normalizedInvitee) {
+        return res.status(400).json({ success: false, error: "Cannot invite the project owner" });
+      }
+
+      // Create collaborator invite (acceptedAt is null until accepted)
+      const [collab] = await db
+        .insert(projectCollaborators)
+        .values({
+          projectId: id,
+          walletAddress: normalizedInvitee,
+          role,
+          invitedBy: normalizedInviter,
+          acceptedAt: null, // Will be set when user accepts
+        })
+        .returning();
+
+      res.json({ success: true, data: collab });
+    } catch (error) {
+      console.error("Error inviting collaborator:", error);
+      res.status(500).json({ success: false, error: "Failed to invite collaborator" });
+    }
+  });
+
+  /**
+   * POST /api/projects/:id/collaborators/accept
+   * Accept a pending invite
+   */
+  app.post("/api/projects/:id/collaborators/accept", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { walletAddress } = req.body;
+
+      if (!walletAddress) {
+        return res.status(400).json({ success: false, error: "walletAddress is required" });
+      }
+
+      const normalizedAddress = walletAddress.toLowerCase();
+
+      const [updated] = await db
+        .update(projectCollaborators)
+        .set({ acceptedAt: new Date() })
+        .where(
+          and(
+            eq(projectCollaborators.projectId, id),
+            eq(projectCollaborators.walletAddress, normalizedAddress),
+            sql`${projectCollaborators.acceptedAt} IS NULL`
+          )
+        )
+        .returning();
+
+      if (!updated) {
+        return res.status(404).json({ success: false, error: "No pending invite found" });
+      }
+
+      res.json({ success: true, data: updated });
+    } catch (error) {
+      console.error("Error accepting invite:", error);
+      res.status(500).json({ success: false, error: "Failed to accept invite" });
+    }
+  });
+
+  /**
+   * PUT /api/projects/:id/collaborators/:address
+   * Update collaborator role
+   */
+  app.put("/api/projects/:id/collaborators/:collabAddress", async (req, res) => {
+    try {
+      const { id, collabAddress } = req.params;
+      const { role, updaterAddress } = req.body;
+
+      if (role === undefined || !updaterAddress) {
+        return res.status(400).json({ success: false, error: "role and updaterAddress are required" });
+      }
+
+      // Check access
+      const access = await checkProjectAccess(id, updaterAddress, PROJECT_ROLE.ADMIN);
+      if (!access.hasAccess) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+
+      // Admins can only change editors/viewers
+      if (access.userRole === PROJECT_ROLE.ADMIN && role <= PROJECT_ROLE.ADMIN) {
+        return res.status(403).json({ success: false, error: "Admins cannot promote to admin" });
+      }
+
+      const normalizedCollab = collabAddress.toLowerCase();
+
+      const [updated] = await db
+        .update(projectCollaborators)
+        .set({ role })
+        .where(
+          and(
+            eq(projectCollaborators.projectId, id),
+            eq(projectCollaborators.walletAddress, normalizedCollab)
+          )
+        )
+        .returning();
+
+      if (!updated) {
+        return res.status(404).json({ success: false, error: "Collaborator not found" });
+      }
+
+      res.json({ success: true, data: updated });
+    } catch (error) {
+      console.error("Error updating collaborator:", error);
+      res.status(500).json({ success: false, error: "Failed to update collaborator" });
+    }
+  });
+
+  /**
+   * DELETE /api/projects/:id/collaborators/:address
+   * Remove a collaborator from a project
+   */
+  app.delete("/api/projects/:id/collaborators/:collabAddress", async (req, res) => {
+    try {
+      const { id, collabAddress } = req.params;
+      const { removerAddress } = req.body;
+
+      if (!removerAddress) {
+        return res.status(400).json({ success: false, error: "removerAddress is required" });
+      }
+
+      const normalizedCollab = collabAddress.toLowerCase();
+      const normalizedRemover = removerAddress.toLowerCase();
+
+      // Allow users to remove themselves
+      if (normalizedCollab === normalizedRemover) {
+        const [deleted] = await db
+          .delete(projectCollaborators)
+          .where(
+            and(
+              eq(projectCollaborators.projectId, id),
+              eq(projectCollaborators.walletAddress, normalizedCollab)
+            )
+          )
+          .returning();
+
+        return res.json({ success: true, data: deleted });
+      }
+
+      // Check access for removing others
+      const access = await checkProjectAccess(id, removerAddress, PROJECT_ROLE.ADMIN);
+      if (!access.hasAccess) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+
+      // Get the collaborator being removed
+      const [targetCollab] = await db
+        .select()
+        .from(projectCollaborators)
+        .where(
+          and(
+            eq(projectCollaborators.projectId, id),
+            eq(projectCollaborators.walletAddress, normalizedCollab)
+          )
+        )
+        .limit(1);
+
+      if (!targetCollab) {
+        return res.status(404).json({ success: false, error: "Collaborator not found" });
+      }
+
+      // Admins can only remove editors/viewers
+      if (access.userRole === PROJECT_ROLE.ADMIN && targetCollab.role <= PROJECT_ROLE.ADMIN) {
+        return res.status(403).json({ success: false, error: "Admins cannot remove other admins" });
+      }
+
+      const [deleted] = await db
+        .delete(projectCollaborators)
+        .where(
+          and(
+            eq(projectCollaborators.projectId, id),
+            eq(projectCollaborators.walletAddress, normalizedCollab)
+          )
+        )
+        .returning();
+
+      res.json({ success: true, data: deleted });
+    } catch (error) {
+      console.error("Error removing collaborator:", error);
+      res.status(500).json({ success: false, error: "Failed to remove collaborator" });
+    }
+  });
+
+  // ============================================
+  // Project Analytics & Insights
+  // ============================================
+
+  /**
+   * GET /api/projects/:id/analytics
+   * Get aggregated analytics for a project
+   */
+  app.get("/api/projects/:id/analytics", async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const [project] = await db
+        .select()
+        .from(projects)
+        .where(eq(projects.id, id))
+        .limit(1);
+
+      if (!project) {
+        return res.status(404).json({ success: false, error: "Project not found" });
+      }
+
+      // Get poll count and cached data
+      const polls = await db
+        .select()
+        .from(projectPolls)
+        .where(eq(projectPolls.projectId, id));
+
+      // Get questionnaire count and completion data
+      const questionnaireLinks = await db
+        .select()
+        .from(projectQuestionnaires)
+        .where(eq(projectQuestionnaires.projectId, id));
+
+      let totalCompletions = 0;
+      if (questionnaireLinks.length > 0) {
+        const questionnaireIds = questionnaireLinks.map((q) => q.questionnaireId);
+        const questionnaireData = await db
+          .select()
+          .from(questionnaires)
+          .where(sql`${questionnaires.id} IN (${sql.join(questionnaireIds.map(qid => sql`${qid}`), sql`, `)})`);
+        totalCompletions = questionnaireData.reduce((sum, q) => sum + q.completionCount, 0);
+      }
+
+      // Calculate total votes from cached poll data
+      const totalVotes = polls.reduce((sum, p) => sum + (p.cachedTotalVotes || 0), 0);
+
+      res.json({
+        success: true,
+        data: {
+          totalPolls: polls.length,
+          totalQuestionnaires: questionnaireLinks.length,
+          totalVotes,
+          totalCompletions,
+          lastUpdated: project.analyticsLastUpdated || project.updatedAt,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching project analytics:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch analytics" });
+    }
+  });
+
+  /**
+   * GET /api/projects/:id/insights
+   * Get AI-generated insights for a project (cached)
+   */
+  app.get("/api/projects/:id/insights", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { type } = req.query;
+
+      let query = db
+        .select()
+        .from(projectInsights)
+        .where(eq(projectInsights.projectId, id));
+
+      if (type) {
+        query = db
+          .select()
+          .from(projectInsights)
+          .where(
+            and(
+              eq(projectInsights.projectId, id),
+              eq(projectInsights.insightType, type as string)
+            )
+          );
+      }
+
+      const insights = await query.orderBy(desc(projectInsights.generatedAt));
+
+      res.json({ success: true, data: insights });
+    } catch (error) {
+      console.error("Error fetching project insights:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch insights" });
+    }
+  });
+
+  /**
+   * POST /api/projects/:id/insights/generate
+   * Generate new AI insights for a project
+   * Note: This is a placeholder - actual AI integration would need OpenAI API key
+   */
+  app.post("/api/projects/:id/insights/generate", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { insightType, address } = req.body;
+
+      if (!insightType || !address) {
+        return res.status(400).json({ success: false, error: "insightType and address are required" });
+      }
+
+      // Check access (need at least Editor role to generate insights)
+      const access = await checkProjectAccess(id, address, PROJECT_ROLE.EDITOR);
+      if (!access.hasAccess) {
+        return res.status(403).json({ success: false, error: "Access denied" });
+      }
+
+      const normalizedAddress = address.toLowerCase();
+
+      // TODO: Implement actual AI generation with OpenAI
+      // For now, create a placeholder insight
+      const [project] = await db
+        .select()
+        .from(projects)
+        .where(eq(projects.id, id))
+        .limit(1);
+
+      if (!project) {
+        return res.status(404).json({ success: false, error: "Project not found" });
+      }
+
+      // Get poll and questionnaire counts for snapshot
+      const polls = await db
+        .select()
+        .from(projectPolls)
+        .where(eq(projectPolls.projectId, id));
+
+      const questionnaireLinks = await db
+        .select()
+        .from(projectQuestionnaires)
+        .where(eq(projectQuestionnaires.projectId, id));
+
+      const totalVotes = polls.reduce((sum, p) => sum + (p.cachedTotalVotes || 0), 0);
+
+      // Create placeholder insight (replace with actual AI generation)
+      const placeholderContent = `## ${insightType.charAt(0).toUpperCase() + insightType.slice(1)} Insights
+
+This is a placeholder for AI-generated ${insightType} insights.
+
+**Project Stats:**
+- ${polls.length} polls with ${totalVotes} total votes
+- ${questionnaireLinks.length} questionnaires
+
+To enable AI insights, configure the OpenAI API key in your environment.`;
+
+      const [insight] = await db
+        .insert(projectInsights)
+        .values({
+          projectId: id,
+          insightType,
+          content: placeholderContent,
+          dataSnapshot: {
+            pollCount: polls.length,
+            questionnaireCount: questionnaireLinks.length,
+            totalVotes,
+            generatedAt: new Date().toISOString(),
+          },
+          requestedBy: normalizedAddress,
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+        })
+        .returning();
+
+      res.json({ success: true, data: insight });
+    } catch (error) {
+      console.error("Error generating project insights:", error);
+      res.status(500).json({ success: false, error: "Failed to generate insights" });
+    }
+  });
+
+  /**
+   * GET /api/projects/pending-invites/:address
+   * Get pending project invites for a user
+   */
+  app.get("/api/projects/pending-invites/:address", async (req, res) => {
+    try {
+      const { address } = req.params;
+      const normalizedAddress = address.toLowerCase();
+
+      const pendingInvites = await db
+        .select({
+          invite: projectCollaborators,
+          project: projects,
+        })
+        .from(projectCollaborators)
+        .innerJoin(projects, eq(projects.id, projectCollaborators.projectId))
+        .where(
+          and(
+            eq(projectCollaborators.walletAddress, normalizedAddress),
+            sql`${projectCollaborators.acceptedAt} IS NULL`
+          )
+        )
+        .orderBy(desc(projectCollaborators.invitedAt));
+
+      res.json({ success: true, data: pendingInvites });
+    } catch (error) {
+      console.error("Error fetching pending invites:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch invites" });
     }
   });
 
