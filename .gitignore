@@ -33,6 +33,10 @@ build/
 .aptos/
 .movement/
 
+# Deployment scripts (may contain private keys)
+contracts/deploy-*.sh
+contracts/restore-*.sh
+
 # Testing
 coverage/
 .nyc_output/
