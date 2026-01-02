@@ -11,7 +11,7 @@
 
 - [ ] Browser with MetaMask/Petra wallet installed
 - [ ] Testnet wallet with MOVE tokens
-- [ ] App running at https://mvpulse.vercel.app (or localhost)
+- [ ] App running at https://mvpulse-mono.onrender.com (or localhost)
 - [ ] Two browser windows/tabs ready (Creator + Participant view)
 - [ ] Movement testnet is operational (check RPC status)
 

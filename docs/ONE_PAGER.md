@@ -94,8 +94,8 @@ Built for Encode x Movement M1 Hackathon
 
 ## Links
 
-- **Live Demo**: [mvpulse.vercel.app](https://mvpulse.vercel.app)
-- **GitHub**: [github.com/mvpulse](https://github.com/mvpulse/mvpulse)
+- **Live Demo**: [mvpulse-mono.onrender.com](https://mvpulse-mono.onrender.com)
+- **GitHub**: [github.com/mvpulse/mvpulse-mono](https://github.com/mvpulse/mvpulse-mono)
 - **Video Demo**: [Coming Soon]
 
 ---

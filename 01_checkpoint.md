@@ -253,8 +253,8 @@ mvpulse/
 
 ```bash
 # Clone repository
-git clone https://github.com/mvpulse/mvpulse.git
-cd mvpulse
+git clone https://github.com/mvpulse/mvpulse-mono.git
+cd mvpulse-mono
 
 # Install frontend dependencies
 cd frontend

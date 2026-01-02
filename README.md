@@ -2,7 +2,7 @@
 
 A decentralized polling and rewards platform built on Movement Network. Create polls, vote, and earn rewards in MOVE, PULSE, or USDC tokens.
 
-**Live Demo:** [mvpulse.vercel.app](https://mvpulse.vercel.app)
+**Live Demo:** [mvpulse-mono.onrender.com](https://mvpulse-mono.onrender.com)
 
 ## Documentation
 

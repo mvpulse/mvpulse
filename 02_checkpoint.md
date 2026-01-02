@@ -4,7 +4,7 @@
 
 **MVPulse** is a decentralized polling and rewards platform built on Movement Network. The platform enables users to create polls, vote, and earn rewards in MOVE or PULSE tokens, with an integrated AMM swap for token exchange.
 
-**Repository:** [github.com/mvpulse](https://github.com/mvpulse/mvpulse)
+**Repository:** [github.com/mvpulse/mvpulse-mono](https://github.com/mvpulse/mvpulse-mono)
 
 ---
 
