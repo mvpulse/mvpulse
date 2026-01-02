@@ -20,7 +20,7 @@ app.use(
 app.use(
   "/api/movement-mainnet",
   createProxyMiddleware({
-    target: "https://full.mainnet.movementinfra.xyz",
+    target: "https://mainnet.movementnetwork.xyz",
     changeOrigin: true,
     pathRewrite: { "^/api/movement-mainnet": "" },
   })

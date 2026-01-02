@@ -1,6 +1,7 @@
+import { useEffect } from "react";
 import { useWallet } from "@aptos-labs/wallet-adapter-react";
-import { Network } from "@aptos-labs/ts-sdk";
-import { useNetwork, NetworkType, NETWORK_CONFIGS } from "@/contexts/NetworkContext";
+import { usePrivy } from "@privy-io/react-auth";
+import { useNetwork, NetworkType, NETWORK_CONFIGS, MOVEMENT_CHAIN_IDS } from "@/contexts/NetworkContext";
 import {
   Select,
   SelectContent,
@@ -9,14 +10,41 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Globe } from "lucide-react";
+import { Globe, Link } from "lucide-react";
 import { toast } from "sonner";
 
 export function NetworkSwitcher() {
-  const { network, setNetwork } = useNetwork();
-  const { connected, changeNetwork } = useWallet();
+  const { network, setNetwork, syncFromWalletChainId } = useNetwork();
+  const { connected, wallet, network: walletNetwork } = useWallet();
+  const { authenticated: privyAuthenticated } = usePrivy();
+
+  // Detect if using browser extension wallet (not Privy)
+  const isBrowserExtensionWallet = connected && !privyAuthenticated && wallet;
+
+  // Detect current wallet network
+  const walletChainId = walletNetwork?.chainId;
+  const isMovementMainnet = walletChainId === MOVEMENT_CHAIN_IDS.MAINNET;
+  const isMovementTestnet = walletChainId === MOVEMENT_CHAIN_IDS.TESTNET;
+  const isOnMovementNetwork = isMovementMainnet || isMovementTestnet;
+
+  // One-way sync: wallet network -> app network
+  // When connected via browser extension, app follows wallet's network
+  useEffect(() => {
+    if (isBrowserExtensionWallet && walletChainId) {
+      syncFromWalletChainId(walletChainId);
+    }
+  }, [isBrowserExtensionWallet, walletChainId, syncFromWalletChainId]);
 
   const handleNetworkChange = async (newNetwork: NetworkType) => {
+    // If using browser extension wallet, don't allow manual switching
+    // The app should follow the wallet's network
+    if (isBrowserExtensionWallet) {
+      toast.info("Network synced from wallet", {
+        description: "Switch network in your wallet extension to change networks.",
+      });
+      return;
+    }
+
     // Check if mainnet is available
     if (newNetwork === "mainnet" && !NETWORK_CONFIGS.mainnet.contractAddress) {
       toast.error("Mainnet not available", {
@@ -25,35 +53,30 @@ export function NetworkSwitcher() {
       return;
     }
 
-    // Update the network context
+    // For Privy users or when not connected, update the app's network context
     setNetwork(newNetwork);
-
-    // If wallet is connected, try to change the network in the wallet
-    if (connected && changeNetwork) {
-      try {
-        // Map to Aptos SDK Network enum
-        const aptosNetwork = newNetwork === "mainnet" ? Network.MAINNET : Network.TESTNET;
-        await changeNetwork(aptosNetwork);
-        toast.success(`Switched to ${NETWORK_CONFIGS[newNetwork].name}`, {
-          description: "Wallet network has been updated.",
-        });
-      } catch (error) {
-        console.error("Failed to change wallet network:", error);
-        toast.warning(`Switched to ${NETWORK_CONFIGS[newNetwork].name}`, {
-          description: "Please manually switch your wallet network.",
-        });
-      }
-    } else {
-      toast.success(`Switched to ${NETWORK_CONFIGS[newNetwork].name}`);
-    }
+    toast.success(`Switched to Movement ${NETWORK_CONFIGS[newNetwork].name}`, {
+      description: `Now using ${newNetwork === "mainnet" ? "mainnet.movementnetwork.xyz" : "testnet.movementnetwork.xyz"}`,
+    });
   };
+
+  // Show warning if wallet is not on a Movement network
+  const showWrongNetworkWarning = isBrowserExtensionWallet && !isOnMovementNetwork;
 
   return (
     <div className="flex items-center gap-2">
-      <Select value={network} onValueChange={(value) => handleNetworkChange(value as NetworkType)}>
-        <SelectTrigger className="w-[130px] h-9">
+      <Select
+        value={network}
+        onValueChange={(value) => handleNetworkChange(value as NetworkType)}
+        disabled={!!isBrowserExtensionWallet}
+      >
+        <SelectTrigger className={`w-[140px] h-9 ${isBrowserExtensionWallet ? "opacity-80" : ""}`}>
           <div className="flex items-center gap-2">
-            <Globe className="w-4 h-4" />
+            {isBrowserExtensionWallet ? (
+              <Link className="w-4 h-4 text-primary" />
+            ) : (
+              <Globe className="w-4 h-4" />
+            )}
             <SelectValue />
           </div>
         </SelectTrigger>
@@ -75,6 +98,20 @@ export function NetworkSwitcher() {
           </SelectItem>
         </SelectContent>
       </Select>
+
+      {/* Show "Synced" indicator when following wallet's network */}
+      {isBrowserExtensionWallet && isOnMovementNetwork && (
+        <Badge variant="secondary" className="text-[10px] px-1.5 py-0.5">
+          Synced
+        </Badge>
+      )}
+
+      {/* Warning if wallet is not on Movement network */}
+      {showWrongNetworkWarning && (
+        <Badge variant="destructive" className="text-[10px] px-1.5 py-0.5">
+          Wrong Network
+        </Badge>
+      )}
     </div>
   );
 }

@@ -56,7 +56,7 @@ export default defineConfig({
         secure: true,
       },
       "/api/movement-mainnet": {
-        target: "https://full.mainnet.movementinfra.xyz",
+        target: "https://mainnet.movementnetwork.xyz",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/movement-mainnet/, ""),
         secure: true,

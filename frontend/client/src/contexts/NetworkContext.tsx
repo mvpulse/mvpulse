@@ -1,6 +1,12 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { createContext, useContext, useState, ReactNode } from "react";
 
 export type NetworkType = "testnet" | "mainnet";
+
+// Movement Network chain IDs
+export const MOVEMENT_CHAIN_IDS = {
+  MAINNET: 126,
+  TESTNET: 250,
+} as const;
 
 interface NetworkConfig {
   name: string;
@@ -16,7 +22,15 @@ interface NetworkConfig {
 interface NetworkContextType {
   network: NetworkType;
   setNetwork: (network: NetworkType) => void;
+  syncFromWalletChainId: (chainId: number | undefined) => void;
   config: NetworkConfig;
+}
+
+// Helper to get network type from chain ID
+export function getNetworkFromChainId(chainId: number | undefined): NetworkType | null {
+  if (chainId === MOVEMENT_CHAIN_IDS.MAINNET) return "mainnet";
+  if (chainId === MOVEMENT_CHAIN_IDS.TESTNET) return "testnet";
+  return null; // Not a Movement network
 }
 
 const NETWORK_CONFIGS: Record<NetworkType, NetworkConfig> = {
@@ -34,8 +48,8 @@ const NETWORK_CONFIGS: Record<NetworkType, NetworkConfig> = {
     name: "Mainnet",
     contractAddress: import.meta.env.VITE_MAINNET_CONTRACT_ADDRESS || "",
     stakingContractAddress: import.meta.env.VITE_MAINNET_STAKING_CONTRACT_ADDRESS || "",
-    rpcUrl: import.meta.env.VITE_MAINNET_RPC_URL || "https://full.mainnet.movementinfra.xyz/v1",
-    fullnodeUrl: "https://full.mainnet.movementinfra.xyz/v1",
+    rpcUrl: import.meta.env.VITE_MAINNET_RPC_URL || "https://mainnet.movementnetwork.xyz/v1",
+    fullnodeUrl: "https://mainnet.movementnetwork.xyz/v1",
     indexerUrl: "https://indexer.mainnet.movementnetwork.xyz/v1/graphql",
     chainId: Number(import.meta.env.VITE_MAINNET_CHAIN_ID) || 126,
     explorerUrl: "https://explorer.movementnetwork.xyz",
@@ -64,10 +78,19 @@ export function NetworkProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // Sync app network from wallet's chain ID (for browser extension wallets)
+  const syncFromWalletChainId = (chainId: number | undefined) => {
+    const detectedNetwork = getNetworkFromChainId(chainId);
+    if (detectedNetwork && detectedNetwork !== network) {
+      console.log(`Syncing app network to wallet: ${detectedNetwork} (chainId: ${chainId})`);
+      setNetwork(detectedNetwork);
+    }
+  };
+
   const config = NETWORK_CONFIGS[network];
 
   return (
-    <NetworkContext.Provider value={{ network, setNetwork, config }}>
+    <NetworkContext.Provider value={{ network, setNetwork, syncFromWalletChainId, config }}>
       {children}
     </NetworkContext.Provider>
   );
