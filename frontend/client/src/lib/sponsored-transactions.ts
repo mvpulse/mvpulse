@@ -81,16 +81,23 @@ function cleanSignature(signature: string): string {
 
 /**
  * Build a fee-payer transaction for sponsorship
+ * Uses 5-minute expiration to allow time for user wallet signing (SDK default is 20 seconds)
  */
 async function buildFeePayerTransaction(
   aptos: Aptos,
   sender: string,
   data: TransactionData
 ) {
+  // Set 5 minute expiration to be safe since we'll wait on user signature
+  const FIVE_MINUTES_FROM_NOW = Math.floor(Date.now() / 1000) + 5 * 60;
+
   return await aptos.transaction.build.simple({
     sender,
     withFeePayer: true,
     data,
+    options: {
+      expireTimestamp: FIVE_MINUTES_FROM_NOW,
+    },
   });
 }
 
@@ -201,9 +208,9 @@ export async function submitNativeSponsoredTransaction(
   const rawTxn = await buildFeePayerTransaction(aptos, walletAddress, transactionData);
 
   // 2. Sign with native wallet (returns AccountAuthenticator directly!)
+  // Note: Don't pass asFeePayer parameter - let it default (Shinami example pattern)
   const { authenticator } = await signTransaction({
     transactionOrPayload: rawTxn,
-    asFeePayer: false, // We're the sender, not the fee payer
   });
 
   // 3. Serialize for backend

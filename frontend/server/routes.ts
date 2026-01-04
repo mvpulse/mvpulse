@@ -1,6 +1,13 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { eq, and, desc, sql, gte } from "drizzle-orm";
+import { GasStationClient } from "@shinami/clients/aptos";
+import {
+  SimpleTransaction,
+  AccountAuthenticator,
+  Deserializer,
+  Hex,
+} from "@aptos-labs/ts-sdk";
 import { db } from "./db";
 import {
   userProfiles,
@@ -1378,47 +1385,32 @@ export async function registerRoutes(
         });
       }
 
-      // Call Shinami Gas Station API
-      const shinamiResponse = await fetch("https://api.us1.shinami.com/movement/gas/v1", {
-        method: "POST",
-        headers: {
-          "X-API-Key": apiKey,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "gas_sponsorAndSubmitSignedTransaction",
-          params: [serializedTransaction, senderSignature],
-          id: 1,
-        }),
-      });
+      // Create Shinami Gas Station client
+      const gasClient = new GasStationClient(apiKey);
 
-      if (!shinamiResponse.ok) {
-        const errorText = await shinamiResponse.text();
-        console.error("Shinami API error:", errorText);
+      // Deserialize the transaction and sender signature (Shinami client requires typed objects)
+      const simpleTx = SimpleTransaction.deserialize(
+        new Deserializer(Hex.fromHexString(serializedTransaction).toUint8Array())
+      );
+      const senderSig = AccountAuthenticator.deserialize(
+        new Deserializer(Hex.fromHexString(senderSignature).toUint8Array())
+      );
+
+      // Sponsor and submit the transaction via Shinami
+      let pendingTx;
+      try {
+        pendingTx = await gasClient.sponsorAndSubmitSignedTransaction(simpleTx, senderSig);
+      } catch (shinamiError: any) {
+        console.error("Shinami sponsorship error:", shinamiError?.message || shinamiError);
         return res.json({
           success: false,
           fallbackRequired: true,
-          error: "Shinami API error",
+          error: shinamiError?.message || "Shinami sponsorship failed",
         });
       }
-
-      const result = await shinamiResponse.json();
-
-      // Check for JSON-RPC errors
-      if (result.error) {
-        console.error("Shinami RPC error:", result.error);
-        return res.json({
-          success: false,
-          fallbackRequired: true,
-          error: result.error.message || "Shinami RPC error",
-        });
-      }
-
-      const pendingTx = result.result?.pendingTransaction;
 
       if (!pendingTx?.hash) {
-        console.error("Unexpected Shinami response:", result);
+        console.error("Unexpected Shinami response - no hash:", pendingTx);
         return res.json({
           success: false,
           fallbackRequired: true,
