@@ -9,7 +9,7 @@ import {
   submitNativeSponsoredTransaction,
   type TransactionData,
 } from "@/lib/sponsored-transactions";
-import { CoinTypeId, COIN_TYPES, getFAMetadataAddress, getTokenStandard } from "@/lib/tokens";
+import { CoinTypeId, COIN_TYPES, getFAMetadataAddress, getTokenStandard, getCoinSymbol } from "@/lib/tokens";
 import { isIndexerOptimizationEnabled } from "@/lib/feature-flags";
 import type { Poll, PollWithMeta, CreatePollInput, VoteInput, TransactionResult, PlatformConfig } from "@/types/poll";
 
@@ -1041,6 +1041,36 @@ export function useContract() {
     }
   }, [client, contractAddress]);
 
+  // Admin function: Initialize FA store for a token (PULSE, USDC, etc.)
+  // This is a one-time setup required before users can create polls with FA tokens
+  // Function signature: initialize_fa_store(account, registry_addr, fa_metadata_address)
+  const initializeFAVault = useCallback(
+    async (coinTypeId: CoinTypeId): Promise<TransactionResult> => {
+      const tokenStandard = getTokenStandard(coinTypeId);
+      if (tokenStandard !== "fungible_asset") {
+        throw new Error(`Token ${getCoinSymbol(coinTypeId)} is not a Fungible Asset and doesn't require vault initialization`);
+      }
+
+      if (!contractAddress) {
+        throw new Error("Contract address not configured");
+      }
+
+      const networkType = getNetworkForFA();
+      const faMetadataAddress = getFAMetadataAddress(coinTypeId, networkType);
+
+      if (!faMetadataAddress) {
+        throw new Error(`FA metadata address not configured for ${getCoinSymbol(coinTypeId)} on ${networkType}`);
+      }
+
+      return executeTransaction(
+        "initialize_fa_store",
+        [contractAddress, faMetadataAddress],
+        `Failed to initialize ${getCoinSymbol(coinTypeId)} vault`
+      );
+    },
+    [executeTransaction, getNetworkForFA, contractAddress]
+  );
+
   return {
     // State
     loading,
@@ -1084,6 +1114,9 @@ export function useContract() {
     getQuestionnairePool,
     getQuestionnairePoolCount,
     hasClaimedQuestionnaire,
+
+    // Admin functions
+    initializeFAVault,
 
     // Helpers
     enrichPoll,

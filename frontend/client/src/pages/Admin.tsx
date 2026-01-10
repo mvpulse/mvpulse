@@ -18,6 +18,8 @@ import {
   Info,
   Lock,
   Wallet,
+  Database,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAdmin } from "@/hooks/useAdmin";
@@ -31,16 +33,19 @@ import {
   FEATURE_FLAGS,
 } from "@/lib/feature-flags";
 import type { PlatformConfig } from "@/types/poll";
+import { COIN_TYPES, getCoinSymbol, type CoinTypeId } from "@/lib/tokens";
+import { showTransactionSuccessToast, showTransactionErrorToast } from "@/lib/transaction-feedback";
 
 export default function Admin() {
   const { isAdmin, isConnected, address, adminAddresses } = useAdmin();
-  const { getPlatformConfig, contractAddress } = useContract();
+  const { getPlatformConfig, initializeFAVault, contractAddress } = useContract();
   const { data: pollCount, isLoading: pollCountLoading } = usePollCount();
-  const { network } = useNetwork();
+  const { network, config } = useNetwork();
 
   const [platformConfig, setPlatformConfig] = useState<PlatformConfig | null>(null);
   const [isLoadingConfig, setIsLoadingConfig] = useState(true);
   const [indexerOptEnabled, setIndexerOptEnabled] = useState(() => isIndexerOptimizationEnabled());
+  const [initializingVault, setInitializingVault] = useState<CoinTypeId | null>(null);
 
   // Fetch platform config
   useEffect(() => {
@@ -70,6 +75,29 @@ export default function Admin() {
         ? "Indexer optimization enabled globally"
         : "Indexer optimization disabled globally"
     );
+  };
+
+  const handleInitializeFAVault = async (coinTypeId: CoinTypeId) => {
+    const symbol = getCoinSymbol(coinTypeId);
+    setInitializingVault(coinTypeId);
+    try {
+      const result = await initializeFAVault(coinTypeId);
+      showTransactionSuccessToast(
+        result.hash,
+        `${symbol} Vault Initialized`,
+        `The ${symbol} token vault has been successfully initialized on ${network}.`,
+        config.explorerUrl,
+        result.sponsored
+      );
+    } catch (error) {
+      console.error(`Failed to initialize ${symbol} vault:`, error);
+      showTransactionErrorToast(
+        `Failed to initialize ${symbol} vault`,
+        error instanceof Error ? error : "Transaction failed"
+      );
+    } finally {
+      setInitializingVault(null);
+    }
   };
 
   const refreshConfig = async () => {
@@ -276,6 +304,81 @@ export default function Admin() {
               </AlertDescription>
             </Alert>
           )}
+        </CardContent>
+      </Card>
+
+      {/* FA Vault Initialization */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Database className="w-5 h-5 text-primary" />
+            Token Vault Initialization
+          </CardTitle>
+          <CardDescription>
+            Initialize Fungible Asset vaults for reward tokens. Required before users can create polls with these tokens.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* PULSE Vault */}
+            <div className="flex items-center justify-between p-4 rounded-lg bg-muted/50 border">
+              <div>
+                <p className="font-medium">PULSE Token</p>
+                <p className="text-sm text-muted-foreground">
+                  Platform governance and rewards token
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleInitializeFAVault(COIN_TYPES.PULSE)}
+                disabled={initializingVault !== null}
+              >
+                {initializingVault === COIN_TYPES.PULSE ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Initializing...
+                  </>
+                ) : (
+                  "Initialize Vault"
+                )}
+              </Button>
+            </div>
+
+            {/* USDC Vault */}
+            <div className="flex items-center justify-between p-4 rounded-lg bg-muted/50 border">
+              <div>
+                <p className="font-medium">USDC Token</p>
+                <p className="text-sm text-muted-foreground">
+                  USD-pegged stablecoin
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleInitializeFAVault(COIN_TYPES.USDC)}
+                disabled={initializingVault !== null}
+              >
+                {initializingVault === COIN_TYPES.USDC ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Initializing...
+                  </>
+                ) : (
+                  "Initialize Vault"
+                )}
+              </Button>
+            </div>
+          </div>
+
+          <Alert>
+            <Info className="w-4 h-4" />
+            <AlertDescription className="text-sm">
+              Vault initialization is a one-time setup per token per network. If users see
+              "Token Vault Not Initialized" errors when creating polls, run this initialization.
+              Currently on: <strong className="capitalize">{network}</strong>
+            </AlertDescription>
+          </Alert>
         </CardContent>
       </Card>
 
