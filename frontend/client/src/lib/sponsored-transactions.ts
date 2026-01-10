@@ -8,7 +8,6 @@ import {
   Ed25519PublicKey,
   Ed25519Signature,
   generateSigningMessageForTransaction,
-  SimpleTransaction,
   Aptos,
   AccountAuthenticator,
 } from "@aptos-labs/ts-sdk";
@@ -162,9 +161,8 @@ export async function submitPrivySponsoredTransaction(
     new Ed25519Signature(cleanSignature(rawSignature))
   );
 
-  // 4. Serialize for backend
-  const simpleTransaction = new SimpleTransaction(rawTxn.rawTransaction);
-  const serializedTransaction = simpleTransaction.bcsToHex().toString();
+  // 4. Serialize for backend (serialize the full SimpleTransaction directly, not just rawTransaction)
+  const serializedTransaction = rawTxn.bcsToHex().toString();
   const serializedSignature = senderAuthenticator.bcsToHex().toString();
 
   // 5. Submit to sponsorship backend
@@ -213,9 +211,8 @@ export async function submitNativeSponsoredTransaction(
     transactionOrPayload: rawTxn,
   });
 
-  // 3. Serialize for backend
-  const simpleTransaction = new SimpleTransaction(rawTxn.rawTransaction);
-  const serializedTransaction = simpleTransaction.bcsToHex().toString();
+  // 3. Serialize for backend (serialize the full SimpleTransaction directly, not just rawTransaction)
+  const serializedTransaction = rawTxn.bcsToHex().toString();
   const serializedSignature = authenticator.bcsToHex().toString();
 
   // 4. Submit to sponsorship backend

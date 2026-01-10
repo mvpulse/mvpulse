@@ -9,33 +9,35 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import { usePlatformStats } from "@/hooks/usePlatformStats";
 import generatedImage from '@assets/generated_images/futuristic_fluid_3d_shapes_with_neon_yellow_and_deep_purple_gradients_on_dark_background.png';
 
 export default function Home() {
   const [_, setLocation] = useLocation();
+  const { formattedStats, isLoading } = usePlatformStats();
 
   const stats = [
     {
       label: "Polls Created",
-      value: "10,000+",
+      value: isLoading ? "..." : formattedStats.pollsCreated,
       icon: FileCheck,
       color: "text-primary"
     },
     {
       label: "Total Responses",
-      value: "1.2M+",
+      value: isLoading ? "..." : formattedStats.totalResponses,
       icon: Users,
       color: "text-accent"
     },
     {
       label: "Rewards Distributed",
-      value: "$500k+",
+      value: isLoading ? "..." : formattedStats.rewardsDistributed,
       icon: Coins,
       color: "text-green-400"
     },
     {
       label: "Active Users",
-      value: "50k+",
+      value: isLoading ? "..." : formattedStats.activeUsers,
       icon: Activity,
       color: "text-blue-400"
     }
