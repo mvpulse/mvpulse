@@ -84,7 +84,7 @@ export function usePlatformStats() {
     refetchOnWindowFocus: false,
   });
 
-  // Fetch blockchain stats (poll count and rewards distributed)
+  // Fetch blockchain stats (poll count, rewards, total votes, active users)
   // These are already network-specific via the contractAddress from NetworkContext
   const blockchainStatsQuery = useQuery({
     queryKey: ["platformStats", "blockchain", contractAddress, network],
@@ -95,9 +95,24 @@ export function usePlatformStats() {
       // Calculate total rewards that have been distributed to participants
       const totalRewardsDistributed = calculateTotalRewardsDistributed(polls);
 
+      // Calculate total votes across all polls
+      const totalVotes = polls.reduce((sum, poll) => sum + poll.totalVotes, 0);
+
+      // Calculate unique voters across all polls
+      const uniqueVoters = new Set<string>();
+      for (const poll of polls) {
+        if (poll.voters) {
+          for (const voter of poll.voters) {
+            uniqueVoters.add(voter.toLowerCase());
+          }
+        }
+      }
+
       return {
         pollCount,
         totalRewardsDistributed,
+        totalVotes,
+        uniqueVotersCount: uniqueVoters.size,
       };
     },
     enabled: !!contractAddress,
@@ -105,12 +120,15 @@ export function usePlatformStats() {
     refetchOnWindowFocus: false,
   });
 
-  // Combine stats
+  // Combine stats - prefer blockchain data as it's the source of truth
+  // Database stats are used as fallback or supplement
   const stats: PlatformStats = {
     pollsCreated: blockchainStatsQuery.data?.pollCount ?? 0,
-    totalResponses: databaseStatsQuery.data?.totalVotes ?? 0,
+    // Use blockchain total votes (source of truth) - fallback to database if blockchain fails
+    totalResponses: blockchainStatsQuery.data?.totalVotes ?? databaseStatsQuery.data?.totalVotes ?? 0,
     rewardsDistributed: blockchainStatsQuery.data?.totalRewardsDistributed ?? 0,
-    activeUsers: databaseStatsQuery.data?.totalUsers ?? 0,
+    // Use blockchain unique voters (source of truth) - fallback to database if blockchain fails
+    activeUsers: blockchainStatsQuery.data?.uniqueVotersCount ?? databaseStatsQuery.data?.totalUsers ?? 0,
   };
 
   // Format numbers for display
