@@ -1041,6 +1041,38 @@ export function useContract() {
     }
   }, [client, contractAddress]);
 
+  // Check if an FA store is initialized for a given token
+  const isFAStoreInitialized = useCallback(
+    async (coinTypeId: CoinTypeId): Promise<boolean> => {
+      const tokenStandard = getTokenStandard(coinTypeId);
+      if (tokenStandard !== "fungible_asset") {
+        return true; // Non-FA tokens don't need vault initialization
+      }
+
+      if (!contractAddress) return false;
+
+      const networkType = getNetworkForFA();
+      const faMetadataAddress = getFAMetadataAddress(coinTypeId, networkType);
+
+      if (!faMetadataAddress) return false;
+
+      try {
+        const result = await client.view({
+          payload: {
+            function: getFunctionId(contractAddress, "is_fa_store_initialized"),
+            typeArguments: [],
+            functionArguments: [contractAddress, faMetadataAddress],
+          },
+        });
+        return result && result[0] === true;
+      } catch (err) {
+        console.error(`Failed to check FA store status for ${getCoinSymbol(coinTypeId)}:`, err);
+        return false;
+      }
+    },
+    [client, contractAddress, getNetworkForFA]
+  );
+
   // Admin function: Initialize FA store for a token (PULSE, USDC, etc.)
   // This is a one-time setup required before users can create polls with FA tokens
   // Function signature: initialize_fa_store(account, registry_addr, fa_metadata_address)
@@ -1108,6 +1140,7 @@ export function useContract() {
     getPlatformConfig,
     getClaimPeriod,
     canFinalizePoll,
+    isFAStoreInitialized,
 
     // Questionnaire pool read functions
     hasCompletedQuestionnaire,

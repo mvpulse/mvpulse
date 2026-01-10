@@ -38,7 +38,7 @@ import { showTransactionSuccessToast, showTransactionErrorToast } from "@/lib/tr
 
 export default function Admin() {
   const { isAdmin, isConnected, address, adminAddresses } = useAdmin();
-  const { getPlatformConfig, initializeFAVault, contractAddress } = useContract();
+  const { getPlatformConfig, initializeFAVault, isFAStoreInitialized, contractAddress } = useContract();
   const { data: pollCount, isLoading: pollCountLoading } = usePollCount();
   const { network, config } = useNetwork();
 
@@ -46,6 +46,12 @@ export default function Admin() {
   const [isLoadingConfig, setIsLoadingConfig] = useState(true);
   const [indexerOptEnabled, setIndexerOptEnabled] = useState(() => isIndexerOptimizationEnabled());
   const [initializingVault, setInitializingVault] = useState<CoinTypeId | null>(null);
+  const [vaultStatus, setVaultStatus] = useState<Record<CoinTypeId, boolean | null>>({
+    [COIN_TYPES.PULSE]: null,
+    [COIN_TYPES.USDC]: null,
+    [COIN_TYPES.MOVE]: null,
+  });
+  const [isLoadingVaultStatus, setIsLoadingVaultStatus] = useState(true);
 
   // Fetch platform config
   useEffect(() => {
@@ -66,6 +72,33 @@ export default function Admin() {
     }
     fetchConfig();
   }, [getPlatformConfig, contractAddress]);
+
+  // Fetch vault initialization status
+  useEffect(() => {
+    async function fetchVaultStatus() {
+      if (!contractAddress) {
+        setIsLoadingVaultStatus(false);
+        return;
+      }
+      setIsLoadingVaultStatus(true);
+      try {
+        const [pulseStatus, usdcStatus] = await Promise.all([
+          isFAStoreInitialized(COIN_TYPES.PULSE),
+          isFAStoreInitialized(COIN_TYPES.USDC),
+        ]);
+        setVaultStatus({
+          [COIN_TYPES.PULSE]: pulseStatus,
+          [COIN_TYPES.USDC]: usdcStatus,
+          [COIN_TYPES.MOVE]: true, // MOVE uses legacy coin, doesn't need FA vault
+        });
+      } catch (error) {
+        console.error("Failed to fetch vault status:", error);
+      } finally {
+        setIsLoadingVaultStatus(false);
+      }
+    }
+    fetchVaultStatus();
+  }, [isFAStoreInitialized, contractAddress, network]);
 
   const handleIndexerOptToggle = (enabled: boolean) => {
     setIndexerOptimizationEnabled(enabled);
@@ -89,6 +122,8 @@ export default function Admin() {
         config.explorerUrl,
         result.sponsored
       );
+      // Update vault status after successful initialization
+      setVaultStatus(prev => ({ ...prev, [coinTypeId]: true }));
     } catch (error) {
       console.error(`Failed to initialize ${symbol} vault:`, error);
       showTransactionErrorToast(
@@ -328,21 +363,29 @@ export default function Admin() {
                   Platform governance and rewards token
                 </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleInitializeFAVault(COIN_TYPES.PULSE)}
-                disabled={initializingVault !== null}
-              >
-                {initializingVault === COIN_TYPES.PULSE ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Initializing...
-                  </>
-                ) : (
-                  "Initialize Vault"
-                )}
-              </Button>
+              {isLoadingVaultStatus ? (
+                <Skeleton className="h-9 w-28" />
+              ) : vaultStatus[COIN_TYPES.PULSE] ? (
+                <Badge className="bg-green-500/20 text-green-500 border-green-500/50">
+                  <CheckCircle className="w-3 h-3 mr-1" /> Initialized
+                </Badge>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleInitializeFAVault(COIN_TYPES.PULSE)}
+                  disabled={initializingVault !== null}
+                >
+                  {initializingVault === COIN_TYPES.PULSE ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Initializing...
+                    </>
+                  ) : (
+                    "Initialize Vault"
+                  )}
+                </Button>
+              )}
             </div>
 
             {/* USDC Vault */}
@@ -353,21 +396,29 @@ export default function Admin() {
                   USD-pegged stablecoin
                 </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleInitializeFAVault(COIN_TYPES.USDC)}
-                disabled={initializingVault !== null}
-              >
-                {initializingVault === COIN_TYPES.USDC ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Initializing...
-                  </>
-                ) : (
-                  "Initialize Vault"
-                )}
-              </Button>
+              {isLoadingVaultStatus ? (
+                <Skeleton className="h-9 w-28" />
+              ) : vaultStatus[COIN_TYPES.USDC] ? (
+                <Badge className="bg-green-500/20 text-green-500 border-green-500/50">
+                  <CheckCircle className="w-3 h-3 mr-1" /> Initialized
+                </Badge>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleInitializeFAVault(COIN_TYPES.USDC)}
+                  disabled={initializingVault !== null}
+                >
+                  {initializingVault === COIN_TYPES.USDC ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Initializing...
+                    </>
+                  ) : (
+                    "Initialize Vault"
+                  )}
+                </Button>
+              )}
             </div>
           </div>
 
