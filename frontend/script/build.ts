@@ -7,6 +7,8 @@ import { rm, readFile } from "fs/promises";
 const allowlist = [
   "@google/generative-ai",
   "@neondatabase/serverless",
+  "@open-rpc/client-js",
+  "@shinami/clients",
   "axios",
   "connect-pg-simple",
   "cors",
@@ -16,6 +18,7 @@ const allowlist = [
   "express",
   "express-rate-limit",
   "express-session",
+  "got",
   "jsonwebtoken",
   "memorystore",
   "multer",
