@@ -3,7 +3,7 @@
 ## Base URL
 
 - **Development**: `http://localhost:5000/api`
-- **Production**: `https://mvpulse-mono.onrender.com/api`
+- **Production**: `https://mvpulse.onrender.com/api`
 
 ---
 

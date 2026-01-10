@@ -4,7 +4,7 @@
 
 **MVPulse** is a decentralized polling and rewards platform built on Movement Network. Since Checkpoint 2, we've significantly expanded the platform with questionnaires, staking, project organization, referral systems, and USDC support.
 
-**Repository:** [github.com/mvpulse/mvpulse-mono](https://github.com/mvpulse/mvpulse-mono)
+**Repository:** [github.com/mvpulse/mvpulse](https://github.com/mvpulse/mvpulse)
 
 ---
 
