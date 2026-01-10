@@ -5,6 +5,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { useNetwork } from "@/contexts/NetworkContext";
 import { TIER_NAMES, TIER_VOTE_LIMITS } from "@shared/schema";
 
 export interface VoteLimitInfo {
@@ -41,6 +42,7 @@ interface RecordVoteResponse {
 
 export function useVoteLimit(address: string | null | undefined) {
   const queryClient = useQueryClient();
+  const { network } = useNetwork();
 
   // Fetch vote limit info
   const voteLimitQuery = useQuery<VoteLimitInfo>({
@@ -96,6 +98,7 @@ export function useVoteLimit(address: string | null | undefined) {
       const res = await apiRequest("POST", `/api/votes/record/${address}`, {
         pollId,
         seasonId,
+        network, // Track which network this vote was recorded on
       });
 
       return res.json();

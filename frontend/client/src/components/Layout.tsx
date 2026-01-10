@@ -1,14 +1,23 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, FolderKanban, PlusCircle, Settings, Home, UserCircle, Vote, ArrowLeftRight, Wallet, Heart, ChevronUp } from "lucide-react";
+import { LayoutDashboard, FolderKanban, PlusCircle, Settings, Home, UserCircle, Vote, ArrowLeftRight, Wallet, Heart, ChevronUp, Menu } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle";
 import { NetworkSwitcher } from "./NetworkSwitcher";
 import { WalletButton } from "./WalletButton";
+import { Button } from "./ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "./ui/sheet";
 import { cn } from "@/lib/utils";
 import { useState, useRef, useEffect } from "react";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const [showDashboardMenu, setShowDashboardMenu] = useState(false);
+  const [tabletMenuOpen, setTabletMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Close menu when clicking outside
@@ -22,9 +31,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Close menu on route change
+  // Close menus on route change
   useEffect(() => {
     setShowDashboardMenu(false);
+    setTabletMenuOpen(false);
   }, [location]);
 
   const navItems = [
@@ -75,7 +85,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </div>
 
           {/* Center: Navigation items - absolutely positioned to be truly centered on viewport */}
-          <div className="hidden md:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 items-center gap-6">
+          {/* Only show on lg+ screens */}
+          <div className="hidden lg:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 items-center gap-6">
             {navItems.map((item) => {
               const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
               return (
@@ -95,9 +106,54 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </div>
 
           {/* Right: Controls */}
-          <div className="flex items-center gap-2 md:gap-4 z-10">
-            <NetworkSwitcher />
-            <ThemeToggle />
+          <div className="flex items-center gap-2 md:gap-3 z-10">
+            {/* Tablet hamburger menu - shows at md, hides at lg */}
+            <Sheet open={tabletMenuOpen} onOpenChange={setTabletMenuOpen}>
+              <SheetTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="hidden md:flex lg:hidden"
+                  aria-label="Open navigation menu"
+                >
+                  <Menu className="h-5 w-5" />
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="right" className="w-72">
+                <SheetHeader>
+                  <SheetTitle>Navigation</SheetTitle>
+                </SheetHeader>
+                <nav className="flex flex-col gap-2 mt-6">
+                  {navItems.map((item) => {
+                    const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        className={cn(
+                          "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
+                          isActive
+                            ? "bg-primary/10 text-primary"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                        )}
+                        onClick={() => setTabletMenuOpen(false)}
+                      >
+                        <item.icon className="w-5 h-5" />
+                        {item.label}
+                      </Link>
+                    );
+                  })}
+                </nav>
+              </SheetContent>
+            </Sheet>
+
+            {/* Network and theme hidden on mobile - accessible via Settings page */}
+            <div className="hidden md:block">
+              <NetworkSwitcher />
+            </div>
+            <div className="hidden md:block">
+              <ThemeToggle />
+            </div>
             <WalletButton />
           </div>
         </div>

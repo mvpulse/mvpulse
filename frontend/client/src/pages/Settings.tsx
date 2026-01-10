@@ -13,11 +13,16 @@ import {
   Wallet,
   Network,
   Zap,
+  Sun,
+  Moon,
+  Monitor,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useWalletConnection } from "@/hooks/useWalletConnection";
-import { useNetwork } from "@/contexts/NetworkContext";
+import { useNetwork, type NetworkType } from "@/contexts/NetworkContext";
 import { useGasSponsorship } from "@/contexts/GasSponsorshipContext";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Label } from "@/components/ui/label";
 import { WalletSelectionModal } from "@/components/WalletSelectionModal";
 import {
   isIndexerOptimizationEnabled,
@@ -26,7 +31,7 @@ import {
 
 export default function SettingsPage() {
   const { isConnected, address, isPrivyWallet, isNativeWallet } = useWalletConnection();
-  const { network } = useNetwork();
+  const { network, setNetwork } = useNetwork();
   const {
     sponsorshipEnabled,
     setSponsorshipEnabled,
@@ -37,6 +42,35 @@ export default function SettingsPage() {
 
   const [isUpdating, setIsUpdating] = useState(false);
   const [indexerOptEnabled, setIndexerOptEnabled] = useState(() => isIndexerOptimizationEnabled());
+  const [theme, setTheme] = useState<"light" | "dark" | "system">("dark");
+
+  // Initialize theme from localStorage
+  useEffect(() => {
+    const storedTheme = localStorage.getItem("theme");
+    if (storedTheme === "light" || storedTheme === "dark") {
+      setTheme(storedTheme);
+    } else {
+      setTheme("system");
+    }
+  }, []);
+
+  const handleThemeChange = (newTheme: "light" | "dark" | "system") => {
+    setTheme(newTheme);
+    if (newTheme === "system") {
+      localStorage.removeItem("theme");
+      const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.classList.toggle("dark", isDark);
+    } else {
+      localStorage.setItem("theme", newTheme);
+      document.documentElement.classList.toggle("dark", newTheme === "dark");
+    }
+    toast.success(`Theme changed to ${newTheme}`);
+  };
+
+  const handleNetworkChange = (newNetwork: NetworkType) => {
+    setNetwork(newNetwork);
+    toast.success(`Switched to ${newNetwork}`);
+  };
 
   const handleIndexerOptToggle = (enabled: boolean) => {
     setIndexerOptimizationEnabled(enabled);
@@ -242,24 +276,125 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
-        {/* Network Info Card */}
+        {/* Theme Card */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Network className="w-5 h-5" />
-              Network
+              <Sun className="w-5 h-5 text-primary" />
+              Appearance
             </CardTitle>
+            <CardDescription>
+              Choose your preferred theme
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center justify-between p-4 rounded-lg bg-muted/50 border">
+            <RadioGroup
+              value={theme}
+              onValueChange={(value) => handleThemeChange(value as "light" | "dark" | "system")}
+              className="grid grid-cols-3 gap-4"
+            >
               <div>
-                <p className="text-sm text-muted-foreground">Current Network</p>
-                <p className="font-medium capitalize">{network}</p>
+                <RadioGroupItem
+                  value="light"
+                  id="theme-light"
+                  className="peer sr-only"
+                />
+                <Label
+                  htmlFor="theme-light"
+                  className="flex flex-col items-center justify-center rounded-lg border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary cursor-pointer"
+                >
+                  <Sun className="w-6 h-6 mb-2" />
+                  <span className="text-sm font-medium">Light</span>
+                </Label>
               </div>
-              <Badge variant={network === "mainnet" ? "default" : "outline"}>
-                {network === "mainnet" ? "Mainnet" : "Testnet"}
-              </Badge>
-            </div>
+              <div>
+                <RadioGroupItem
+                  value="dark"
+                  id="theme-dark"
+                  className="peer sr-only"
+                />
+                <Label
+                  htmlFor="theme-dark"
+                  className="flex flex-col items-center justify-center rounded-lg border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary cursor-pointer"
+                >
+                  <Moon className="w-6 h-6 mb-2" />
+                  <span className="text-sm font-medium">Dark</span>
+                </Label>
+              </div>
+              <div>
+                <RadioGroupItem
+                  value="system"
+                  id="theme-system"
+                  className="peer sr-only"
+                />
+                <Label
+                  htmlFor="theme-system"
+                  className="flex flex-col items-center justify-center rounded-lg border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary cursor-pointer"
+                >
+                  <Monitor className="w-6 h-6 mb-2" />
+                  <span className="text-sm font-medium">System</span>
+                </Label>
+              </div>
+            </RadioGroup>
+          </CardContent>
+        </Card>
+
+        {/* Network Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Network className="w-5 h-5 text-primary" />
+              Network
+            </CardTitle>
+            <CardDescription>
+              Select which blockchain network to use
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <RadioGroup
+              value={network}
+              onValueChange={(value) => handleNetworkChange(value as NetworkType)}
+              className="grid grid-cols-2 gap-4"
+            >
+              <div>
+                <RadioGroupItem
+                  value="testnet"
+                  id="network-testnet"
+                  className="peer sr-only"
+                />
+                <Label
+                  htmlFor="network-testnet"
+                  className="flex flex-col items-center justify-center rounded-lg border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary cursor-pointer"
+                >
+                  <Badge variant="outline" className="mb-2">Test</Badge>
+                  <span className="text-sm font-medium">Testnet</span>
+                  <span className="text-xs text-muted-foreground mt-1">For testing</span>
+                </Label>
+              </div>
+              <div>
+                <RadioGroupItem
+                  value="mainnet"
+                  id="network-mainnet"
+                  className="peer sr-only"
+                />
+                <Label
+                  htmlFor="network-mainnet"
+                  className="flex flex-col items-center justify-center rounded-lg border-2 border-muted bg-popover p-4 hover:bg-accent hover:text-accent-foreground peer-data-[state=checked]:border-primary [&:has([data-state=checked])]:border-primary cursor-pointer"
+                >
+                  <Badge variant="default" className="mb-2">Live</Badge>
+                  <span className="text-sm font-medium">Mainnet</span>
+                  <span className="text-xs text-muted-foreground mt-1">Real assets</span>
+                </Label>
+              </div>
+            </RadioGroup>
+
+            <Alert className="mt-4">
+              <Info className="w-4 h-4" />
+              <AlertDescription className="text-sm">
+                Switching networks will reload your data from the selected blockchain.
+                Make sure your wallet is connected to the same network.
+              </AlertDescription>
+            </Alert>
           </CardContent>
         </Card>
       </div>

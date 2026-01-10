@@ -296,8 +296,8 @@ module poll::poll {
 
 ```bash
 # Clone repository
-git clone https://github.com/mvpulse/mvpulse-mono.git
-cd mvpulse-mono
+git clone https://github.com/mvpulse/mvpulse.git
+cd mvpulse
 
 # Install dependencies
 cd frontend && npm install

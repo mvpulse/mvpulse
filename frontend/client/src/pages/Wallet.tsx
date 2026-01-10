@@ -46,7 +46,7 @@ import { formatRelativeTime } from "@/lib/events";
 import { useStaking } from "@/hooks/useStaking";
 import { Progress } from "@/components/ui/progress";
 import { TIER_NAMES, TIER_PULSE_THRESHOLDS, TIERS } from "@shared/schema";
-import { Lock, Unlock, TrendingUp, ChevronRight } from "lucide-react";
+import { Lock, Unlock, TrendingUp, ChevronRight, Settings } from "lucide-react";
 
 export default function WalletPage() {
   const { isConnected, address, isPrivyWallet } = useWalletConnection();
@@ -600,6 +600,13 @@ export default function WalletPage() {
                   Account has been funded
                 </p>
               )}
+              {/* Settings link - especially important on mobile where header controls are hidden */}
+              <Link href="/settings">
+                <Button variant="outline" className="w-full justify-start">
+                  <Settings className="w-4 h-4 mr-2" />
+                  Settings
+                </Button>
+              </Link>
             </CardContent>
           </Card>
 

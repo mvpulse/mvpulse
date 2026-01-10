@@ -302,7 +302,10 @@ export async function registerRoutes(
   app.post("/api/votes/record/:address", async (req, res) => {
     try {
       const { address } = req.params;
-      const { pollId } = req.body;
+      const { pollId, network = "testnet" } = req.body;
+
+      // Validate network parameter
+      const validNetwork = network === "mainnet" ? "mainnet" : "testnet";
 
       const profile = await getOrCreateProfile(address);
       const today = getTodayString();
@@ -349,14 +352,15 @@ export async function registerRoutes(
         .where(eq(userProfiles.id, profile.id))
         .returning();
 
-      // Log daily vote
+      // Log daily vote (network-specific)
       const [existingLog] = await db
         .select()
         .from(dailyVoteLogs)
         .where(
           and(
             eq(dailyVoteLogs.walletAddress, profile.walletAddress),
-            eq(dailyVoteLogs.voteDate, today)
+            eq(dailyVoteLogs.voteDate, today),
+            eq(dailyVoteLogs.network, validNetwork)
           )
         )
         .limit(1);
@@ -381,6 +385,7 @@ export async function registerRoutes(
           voteDate: today,
           voteCount: 1,
           pollIds: pollId ? [pollId] : [],
+          network: validNetwork,
         });
       }
 
@@ -1397,9 +1402,70 @@ export async function registerRoutes(
       );
 
       // Sponsor and submit the transaction via Shinami
+      // First, let's try a raw call to see what Shinami returns
       let pendingTx;
       try {
-        pendingTx = await gasClient.sponsorAndSubmitSignedTransaction(simpleTx, senderSig);
+        // Debug: Log the exact data being sent
+        console.log("=== Shinami Debug ===");
+        console.log("API Key (full):", apiKey);
+        console.log("API Key length:", apiKey.length);
+        console.log("Transaction hex:", serializedTransaction.substring(0, 100) + "...");
+        console.log("Signature hex:", senderSignature.substring(0, 100) + "...");
+
+        // First test: Try gas_getFund to verify API key works
+        console.log("Testing API key with gas_getFund...");
+        const testResponse = await fetch("https://api.us1.shinami.com/movement/gas/v1", {
+          method: "POST",
+          headers: {
+            "X-API-Key": apiKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            method: "gas_getFund",
+            params: [],
+            id: 1,
+          }),
+        });
+        console.log("gas_getFund status:", testResponse.status);
+        const testText = await testResponse.text();
+        console.log("gas_getFund response:", testText || "(empty)");
+
+        // Try raw fetch first to see actual response
+        const rawResponse = await fetch("https://api.us1.shinami.com/movement/gas/v1", {
+          method: "POST",
+          headers: {
+            "X-API-Key": apiKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            method: "gas_sponsorAndSubmitSignedTransaction",
+            params: [
+              simpleTx.rawTransaction.bcsToHex().toString(),
+              senderSig.bcsToHex().toString(),
+              [], // empty secondary signers
+            ],
+            id: 1,
+          }),
+        });
+
+        console.log("Shinami HTTP status:", rawResponse.status, rawResponse.statusText);
+        const rawText = await rawResponse.text();
+        console.log("Shinami raw response text:", rawText || "(empty)");
+
+        if (!rawText) {
+          throw new Error(`Shinami returned empty response with status ${rawResponse.status}`);
+        }
+
+        const rawResult = JSON.parse(rawText);
+        console.log("Raw Shinami response:", JSON.stringify(rawResult, null, 2));
+
+        if (rawResult.error) {
+          throw new Error(rawResult.error.message || JSON.stringify(rawResult.error));
+        }
+
+        pendingTx = rawResult.result?.pendingTransaction;
       } catch (shinamiError: any) {
         console.error("Shinami sponsorship error:", shinamiError?.message || shinamiError);
         return res.json({
@@ -3782,6 +3848,55 @@ To enable AI insights, configure the OpenAI API key in your environment.`;
     } catch (error) {
       console.error("Error fetching pending invites:", error);
       res.status(500).json({ success: false, error: "Failed to fetch invites" });
+    }
+  });
+
+  // ============================================
+  // Platform Statistics (for landing page)
+  // ============================================
+
+  /**
+   * GET /api/platform/stats
+   * Get platform-wide statistics for the landing page
+   * Query params: network (optional, defaults to "testnet")
+   * Returns: totalUsers, totalVotes (from database, filtered by network)
+   * Note: pollCount and rewardsDistributed come from blockchain (fetched by frontend)
+   */
+  app.get("/api/platform/stats", async (req, res) => {
+    try {
+      const { network: networkParam } = req.query;
+      const network = networkParam === "mainnet" ? "mainnet" : "testnet";
+
+      // Get total unique users who have voted on this network
+      const [userCount] = await db
+        .select({ count: sql<number>`count(distinct ${dailyVoteLogs.walletAddress})` })
+        .from(dailyVoteLogs)
+        .where(eq(dailyVoteLogs.network, network));
+
+      // Get total votes on this network (sum of all vote counts from daily logs)
+      const [voteSum] = await db
+        .select({ total: sql<number>`coalesce(sum(${dailyVoteLogs.voteCount}), 0)` })
+        .from(dailyVoteLogs)
+        .where(eq(dailyVoteLogs.network, network));
+
+      // Get total questionnaire completions (not network-specific for now)
+      const [completionCount] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(questionnaireProgress)
+        .where(eq(questionnaireProgress.isComplete, true));
+
+      res.json({
+        success: true,
+        data: {
+          totalUsers: Number(userCount?.count || 0),
+          totalVotes: Number(voteSum?.total || 0),
+          totalQuestionnaireCompletions: Number(completionCount?.count || 0),
+          network,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching platform stats:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch platform statistics" });
     }
   });
 

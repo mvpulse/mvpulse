@@ -197,6 +197,7 @@ export const dailyVoteLogs = pgTable("daily_vote_logs", {
   voteDate: date("vote_date").notNull(),
   voteCount: integer("vote_count").default(0).notNull(),
   pollIds: jsonb("poll_ids").$type<number[]>().default([]).notNull(),
+  network: varchar("network", { length: 20 }).default("testnet").notNull(), // "testnet" | "mainnet"
 
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

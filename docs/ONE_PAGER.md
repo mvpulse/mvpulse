@@ -94,8 +94,8 @@ Built for Encode x Movement M1 Hackathon
 
 ## Links
 
-- **Live Demo**: [mvpulse-mono.onrender.com](https://mvpulse-mono.onrender.com)
-- **GitHub**: [github.com/mvpulse/mvpulse-mono](https://github.com/mvpulse/mvpulse-mono)
+- **Live Demo**: [mvpulse.onrender.com](https://mvpulse.onrender.com)
+- **GitHub**: [github.com/mvpulse/mvpulse](https://github.com/mvpulse/mvpulse)
 - **Video Demo**: [Coming Soon]
 
 ---
